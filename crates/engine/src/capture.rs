@@ -14,6 +14,8 @@ pub enum CaptureError {
     Xcap(#[from] XCapError),
     #[error("no screen found")]
     NoMonitor,
+    #[error("screen capture permission not granted")]
+    PermissionDenied,
     #[error("preview image: {0}")]
     Preview(String),
 }

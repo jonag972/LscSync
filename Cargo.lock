@@ -4074,6 +4074,7 @@ dependencies = [
  "lscsync-core",
  "num-complex",
  "objc2 0.6.5",
+ "objc2-core-graphics",
  "objc2-core-media",
  "objc2-foundation 0.3.2",
  "objc2-screen-capture-kit",

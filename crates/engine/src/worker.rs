@@ -310,6 +310,19 @@ impl Engine {
             return Err(first_error.map_or(EngineError::NotConfigured, EngineError::Lsc));
         }
 
+        // macOS: the capture APIs fail silently without the TCC grant, and the
+        // consent dialog only appears when the app asks for it, so ask now.
+        let needs_screen_capture = match settings.mode {
+            Mode::ScreenZones | Mode::Screen => true,
+            // System audio (ScreenCaptureKit) needs the same grant; the
+            // microphone fallback asks for the Microphone one instead.
+            Mode::Audio => !crate::audio::uses_microphone(),
+            Mode::Fixed => false,
+        };
+        if needs_screen_capture && !crate::permission::ensure_screen_capture_access() {
+            return Err(EngineError::Capture(CaptureError::PermissionDenied));
+        }
+
         let capture = match settings.mode {
             Mode::ScreenZones | Mode::Screen => Some(ScreenCapture::new()?),
             Mode::Audio | Mode::Fixed => None,

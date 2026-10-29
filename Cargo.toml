@@ -37,6 +37,7 @@ xcap = "0.9.8"
 realfft = "3.5.1"
 num-complex = "0.4"
 objc2-screen-capture-kit = "0.3.2"
+objc2-core-graphics = "0.3.2"
 objc2-core-media = "0.3.2"
 rustuya = { version = "0.4.6", features = ["tokio"] }
 tokio = { version = "1", features = ["rt-multi-thread", "macros", "time", "sync"] }

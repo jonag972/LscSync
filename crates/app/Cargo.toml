@@ -40,7 +40,8 @@ extended-description = """\
 Syncs LSC Smart Connect (Tuya) light panels with the screen (Ambilight, \
 3 zones), a single dominant color, or the music, entirely over the local \
 network."""
-depends = "$auto"
+# The GPU renderer loads Vulkan at runtime, which $auto cannot see.
+depends = "$auto, libvulkan1"
 assets = [
     ["target/release/lscsync", "usr/bin/", "755"],
     ["../../assets/linux/lscsync.desktop", "usr/share/applications/", "644"],

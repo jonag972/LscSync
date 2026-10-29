@@ -5,7 +5,7 @@ use std::time::Duration;
 
 use gpui_kit::prelude::FluentBuilder as _;
 use gpui_kit::*;
-use lscsync_core::Profile;
+use lscsync_core::{Mode, Profile};
 use lscsync_engine::tuya::scan_local_network_blocking;
 use lscsync_platform::profile_path;
 use rust_i18n::t;
@@ -45,15 +45,15 @@ impl Root {
                 sync_device,
             } => {
                 self.profile.merge_devices(devices.clone());
-                if !self
-                    .profile
-                    .devices
-                    .iter()
-                    .any(|d| d.id == *sync_device && !d.modes.is_empty())
-                {
-                    self.toggle_synced(sync_device, cx);
+                // The device picked during setup follows every mode.
+                for mode in Mode::ALL {
+                    self.profile.set_synced(sync_device, mode, true);
                 }
                 self.save();
+                if self.engine.is_some() {
+                    self.stop(cx);
+                    self.start(cx);
+                }
                 self.setup = None;
                 self.page = Page::Sync;
             }

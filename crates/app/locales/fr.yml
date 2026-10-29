@@ -83,7 +83,7 @@ menu:
   stop: "Arrêter la synchro"
   music_unavailable: "Musique (indisponible sur ce système)"
   open: "Ouvrir LscSync"
-  devices: "Appareils…"
+  devices: "Gérer mes lumières…"
   settings: "Réglages…"
   update: "Mise à jour disponible (%{version})…"
   quit: "Quitter LscSync"

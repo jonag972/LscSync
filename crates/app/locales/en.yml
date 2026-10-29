@@ -85,7 +85,7 @@ menu:
   stop: "Stop syncing"
   music_unavailable: "Music (not available on this system)"
   open: "Open LscSync"
-  devices: "Devices…"
+  devices: "Manage my lights…"
   settings: "Settings…"
   update: "Update available (%{version})…"
   quit: "Quit LscSync"

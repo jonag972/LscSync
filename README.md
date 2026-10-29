@@ -54,7 +54,10 @@ with a Vulkan graphics driver, Wayland or X11, and PulseAudio or PipeWire. On GN
 bar icon needs the *AppIndicator* extension.
 
 The Windows and Linux versions are new: if something doesn't work, please
-[open an issue](https://github.com/jonag972/LscSync/issues). The app is in French for now.
+[open an issue](https://github.com/jonag972/LscSync/issues).
+
+The app speaks English and French, and follows your system's language; you can change it in
+**Settings**.
 
 ## Connect your panels
 
@@ -66,8 +69,8 @@ The first time you open the app, it walks you through it:
 3. Your devices show up, with the ones found on your Wi-Fi network ready to use. Pick the one
    that follows your screen, and you're done.
 
-To set up another computer without scanning again, use **Appareils › Exporter le profil**, then
-**Importer** on the other computer. The exported file holds your devices' keys: keep it to
+To set up another computer without scanning again, use **Devices › Export profile**, then
+**Import** on the other computer. The exported file holds your devices' keys: keep it to
 yourself.
 
 ## Your data
@@ -78,8 +81,11 @@ nowhere else.
 - No account, no analytics, no tracking.
 - The screen and sound are analyzed in memory to compute a few colors, then discarded. Nothing
   is recorded or stored.
-- The only time the app goes online is during setup: it contacts Tuya's servers (the platform
-  behind LSC Smart Connect) to fetch your devices' keys. After that, everything stays local.
+- During setup, the app contacts Tuya's servers (the platform behind LSC Smart Connect) to
+  fetch your devices' keys. After that, your devices are driven locally.
+- To tell you about new versions, it asks GitHub for the latest release at launch and once a
+  day. The request carries nothing about you or your devices; you can turn it off in
+  **Settings**.
 
 ## Is my kit compatible?
 
@@ -109,11 +115,11 @@ workflow builds every download when a `v*` tag is pushed and opens a draft GitHu
 
 | Crate | Role |
 |---|---|
-| `crates/core` | Pure logic: colors, panel protocol, profile and settings |
+| `crates/core` | Pure logic: colors, panel protocol, profile, settings and preferences |
 | `crates/engine` | Local Tuya connection, screen and audio capture, sync thread |
-| `crates/cloud` | Tuya QR code login, the only code that goes online |
+| `crates/cloud` | Tuya QR code login |
 | `crates/platform` | Per-OS folders |
-| `crates/app` | Interface and menu bar |
+| `crates/app` | Interface, menu bar, update check; its texts are in `crates/app/locales` |
 | `crates/cli` | Command-line diagnostics |
 
 ### How it works

@@ -20,6 +20,11 @@ pub fn profile_path() -> PathBuf {
     data_dir().join("profile.json")
 }
 
+/// Preferences of this computer: language, update checks.
+pub fn preferences_path() -> PathBuf {
+    data_dir().join("preferences.json")
+}
+
 /// Folder of the app when it was called Lumière Sync.
 fn legacy_data_dir() -> Option<PathBuf> {
     ProjectDirs::from("", "", "LumiereSync").map(|dirs| dirs.data_dir().to_path_buf())

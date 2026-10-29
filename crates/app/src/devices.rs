@@ -8,6 +8,7 @@ use gpui_kit::*;
 use lscsync_core::Profile;
 use lscsync_engine::tuya::scan_local_network_blocking;
 use lscsync_platform::profile_path;
+use rust_i18n::t;
 
 use crate::setup::{SetupEvent, SetupFlow, device_row};
 use crate::theme::*;
@@ -94,15 +95,18 @@ impl Root {
                                 .unwrap_or_default();
                         }
                         root.save();
-                        root.notice = Some(match matches {
-                            0 => "Aucun de tes appareils n'a répondu sur ce réseau.".to_owned(),
-                            1 => "1 appareil trouvé sur ce réseau.".to_owned(),
-                            n => format!("{n} appareils trouvés sur ce réseau."),
-                        });
+                        root.notice = Some(
+                            match matches {
+                                0 => t!("devices.scan_none"),
+                                1 => t!("devices.scan_one"),
+                                n => t!("devices.scan_many", count = n),
+                            }
+                            .to_string(),
+                        );
                     }
                     Err(error) => {
                         tracing::warn!("network scan: {error}");
-                        root.notice = Some("La recherche sur le réseau a échoué.".to_owned());
+                        root.notice = Some(t!("devices.scan_failed").to_string());
                     }
                 }
                 cx.notify();
@@ -121,10 +125,13 @@ impl Root {
             };
             let written = std::fs::write(&path, content);
             let _ = this.update(cx, |root, cx| {
-                root.notice = Some(match written {
-                    Ok(()) => format!("Profil exporté : {}", path.display()),
-                    Err(error) => format!("Export impossible : {error}"),
-                });
+                root.notice = Some(
+                    match written {
+                        Ok(()) => t!("devices.exported", path = path.display()),
+                        Err(error) => t!("devices.export_failed", error = error),
+                    }
+                    .to_string(),
+                );
                 cx.notify();
             });
         })
@@ -136,7 +143,7 @@ impl Root {
             files: true,
             directories: false,
             multiple: false,
-            prompt: Some("Importer".into()),
+            prompt: Some(t!("devices.import").to_string().into()),
         });
         cx.spawn(async move |this, cx| {
             let Ok(Ok(Some(paths))) = paths.await else {
@@ -153,8 +160,7 @@ impl Root {
                     Ok(profile) => root.apply_imported(profile, cx),
                     Err(error) => {
                         tracing::warn!("import {}: {error}", path.display());
-                        root.notice =
-                            Some("Ce fichier n'est pas un profil LscSync valide.".to_owned());
+                        root.notice = Some(t!("devices.import_invalid").to_string());
                         root.page = Page::Devices;
                         root.setup = None;
                     }
@@ -175,10 +181,13 @@ impl Root {
         self.save();
         self.setup = None;
         self.page = Page::Devices;
-        self.notice = Some(match count {
-            1 => "Profil importé : 1 appareil.".to_owned(),
-            n => format!("Profil importé : {n} appareils."),
-        });
+        self.notice = Some(
+            match count {
+                1 => t!("devices.imported_one"),
+                n => t!("devices.imported_many", count = n),
+            }
+            .to_string(),
+        );
     }
 
     pub(crate) fn render_devices(&self, cx: &mut Context<Self>) -> Div {
@@ -207,19 +216,19 @@ impl Root {
                     .flex()
                     .items_center()
                     .justify_between()
-                    .child(title("Appareils"))
+                    .child(title(t!("devices.title").to_string()))
                     .child(
-                        link("back", "Retour").on_click(cx.listener(|this, _, _, cx| {
-                            this.page = Page::Sync;
-                            this.notice = None;
-                            cx.notify();
-                        })),
+                        link("back", t!("action.back").to_string()).on_click(cx.listener(
+                            |this, _, _, cx| {
+                                this.page = Page::Sync;
+                                this.notice = None;
+                                cx.notify();
+                            },
+                        )),
                     ),
             )
             .child(list)
-            .child(body(
-                "Touche un appareil pour choisir celui qui suit ton écran.",
-            ))
+            .child(body(t!("devices.hint").to_string()))
             .when_some(self.notice.clone(), |this, notice| {
                 this.child(
                     div()
@@ -233,16 +242,16 @@ impl Root {
                 button(
                     "rescan",
                     if self.scanning {
-                        "Recherche en cours…"
+                        t!("devices.scanning").to_string()
                     } else {
-                        "Rechercher sur le réseau"
+                        t!("devices.rescan").to_string()
                     },
                     false,
                 )
                 .on_click(cx.listener(|this, _, _, cx| this.rescan(cx))),
             )
             .child(
-                button("reconnect", "Reconnecter mon compte LSC", false).on_click(
+                button("reconnect", t!("devices.reconnect").to_string(), false).on_click(
                     cx.listener(|this, _, window, cx| this.open_setup(true, Some(window), cx)),
                 ),
             )
@@ -251,19 +260,17 @@ impl Root {
                     .flex()
                     .gap(px(8.0))
                     .child(
-                        button("export", "Exporter le profil", false)
+                        button("export", t!("devices.export").to_string(), false)
                             .flex_1()
                             .on_click(cx.listener(|this, _, _, cx| this.export(cx))),
                     )
                     .child(
-                        button("import", "Importer", false)
+                        button("import", t!("devices.import").to_string(), false)
                             .flex_1()
                             .on_click(cx.listener(|this, _, _, cx| this.import(cx))),
                     ),
             )
-            .child(body(
-                "Le profil exporté contient les clés de tes appareils : garde-le pour toi.",
-            ))
+            .child(body(t!("devices.export_warning").to_string()))
     }
 }
 

@@ -1,0 +1,152 @@
+# Interface texts in English, the fallback language: every key must exist
+# here. To add a language, copy this file to <code>.yml (fr.yml, de.yml…),
+# translate the values and add it to Language in crates/core/src/preferences.rs.
+_version: 1
+
+status:
+  paused: "Paused"
+  connecting: "Connecting…"
+  connecting_panels: "Connecting to the panels…"
+  synced: "Synced"
+  synced_mode: "Synced · %{mode}"
+  error: "Error"
+  tooltip: "LscSync — %{status}"
+
+mode:
+  ambilight: "Ambilight"
+  color: "Color"
+  music: "Music"
+
+hero:
+  zones_screen: "3 zones · screen"
+  color_screen: "1 color · screen"
+  bass_microphone: "Bass · microphone"
+  bass_zones: "Bass · 3 zones"
+  paused_title: "Panels paused"
+  paused_body: "Start syncing to drive them."
+
+action:
+  start: "Start syncing"
+  retry: "Try again"
+  cancel: "Cancel"
+  stop: "Stop"
+  back: "Back"
+
+tuning:
+  heading: "ADJUSTMENTS"
+  brightness: "Brightness"
+  reactivity: "Reactivity"
+  min_glow: "Min. glow"
+  saturation: "Saturation"
+  smoothing: "Smoothing"
+  height: "Height"
+  microphone_note: "On macOS 12, Music mode listens through the Mac's microphone, so the sound of the room counts too. Turn the speakers up for deeper bass (macOS 13 captures the sound directly)."
+
+footer:
+  devices: "Devices"
+  devices_named: "Devices · %{name}"
+  settings: "Settings"
+  quit: "Quit"
+
+error:
+  not_configured_title: "No device set up"
+  not_configured_body: "Connect your LSC devices to start."
+  unreachable_title: "Panels unreachable"
+  unreachable_body: "No answer from %{ip} within 10 s. Check that they're on and on the same network."
+  screen_title: "Can't capture the screen"
+  screen_permission: "Allow LscSync in System Settings › Privacy & Security › Screen & System Audio Recording."
+  sound_title: "Sound unavailable"
+  sound_unsupported: "Music mode isn't available on this system yet."
+  microphone_title: "Microphone blocked"
+  microphone_permission: "Allow LscSync in System Settings › Privacy & Security › Microphone."
+  device_title: "The panels refused the connection"
+  device_body: "Their key may have changed: reconnect your devices."
+  other_title: "Something went wrong"
+
+menu:
+  start: "Start syncing"
+  retry: "Try again"
+  cancel: "Cancel connecting"
+  stop: "Stop syncing"
+  music_unavailable: "Music (not available on this system)"
+  open: "Open LscSync"
+  devices: "Devices…"
+  settings: "Settings…"
+  update: "Update available (%{version})…"
+  quit: "Quit LscSync"
+  close_window: "Close Window"
+
+setup:
+  welcome_title: "Welcome to LscSync"
+  welcome_body: "Connect your LSC Smart Connect devices in a minute, with the LSC app on your phone."
+  connect: "Connect my devices"
+  import: "Import a profile"
+  step_1: "STEP 1 OF 2"
+  step_2: "STEP 2 OF 2"
+  code_title: "Your LSC user code"
+  code_where: "In the LSC Smart Connect app: Me › Settings › Account and Security › User Code."
+  code_placeholder: "User code"
+  code_privacy: "This code is only sent to Tuya, for the time of the connection."
+  code_missing: "Enter your user code."
+  continue: "Continue"
+  connecting: "Connecting…"
+  qr_unavailable: "Couldn't show the QR code."
+  scan_title: "Scan this code with the LSC app"
+  scan_where: "LSC app › Me › scan icon at the top right, then confirm the connection."
+  scan_waiting: "Waiting for the scan…"
+  scan_fetching: "Getting your devices…"
+  scan_expired: "The QR code has expired."
+  new_qr: "New QR code"
+  found_none: "No device on this account"
+  found_one: "1 device on your account"
+  found_many: "%{count} devices on your account"
+  found_none_body: "Add your devices in the LSC Smart Connect app first, then try again."
+  found_body: "Pick the device that follows your screen. The keys stay on this computer."
+  done: "Let's go"
+  error_network: "No Internet connection: check it and try again."
+  error_refused: "User code refused: check it in the LSC Smart Connect app."
+  error_response: "Unexpected answer from Tuya, try again in a moment."
+
+device:
+  sync_tag: "Sync"
+  offline: "offline"
+
+devices:
+  title: "Devices"
+  hint: "Tap a device to choose the one that follows your screen."
+  rescan: "Search the network"
+  scanning: "Searching…"
+  reconnect: "Reconnect my LSC account"
+  export: "Export profile"
+  import: "Import"
+  export_warning: "The exported profile holds your devices' keys: keep it to yourself."
+  scan_none: "None of your devices answered on this network."
+  scan_one: "1 device found on this network."
+  scan_many: "%{count} devices found on this network."
+  scan_failed: "The network search failed."
+  exported: "Profile exported: %{path}"
+  export_failed: "Couldn't export: %{error}"
+  import_invalid: "This file isn't a valid LscSync profile."
+  imported_one: "Profile imported: 1 device."
+  imported_many: "Profile imported: %{count} devices."
+
+settings:
+  title: "Settings"
+  language_heading: "LANGUAGE"
+  language: "App language"
+  language_auto: "Auto"
+  updates_heading: "UPDATES"
+  check_automatically: "Check automatically"
+  version: "LscSync %{version}"
+  up_to_date: "LscSync %{version} · up to date"
+  checking: "Checking…"
+  check_failed: "Couldn't check, try again later"
+  check_now: "Check now"
+  macos_permission: "After updating, allow Screen Recording again: macOS sees each new version as a new app."
+  about_heading: "ABOUT"
+  source: "Source code and help"
+  license: "Independent project, MIT license"
+
+update:
+  available: "LscSync %{version} is available"
+  download: "Download"

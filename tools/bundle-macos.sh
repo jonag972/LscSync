@@ -51,11 +51,19 @@ cat > "$APP/Contents/Info.plist" <<EOF
     <key>CFBundleShortVersionString</key><string>$VERSION</string>
     <key>CFBundleVersion</key><string>$VERSION</string>
     <key>LSMinimumSystemVersion</key><string>12.3</string>
-    <key>NSMicrophoneUsageDescription</key><string>Sur macOS 12, le mode Musique écoute la musique de la pièce avec le micro pour faire pulser tes panneaux.</string>
+    <key>NSMicrophoneUsageDescription</key><string>On macOS 12, Music mode listens to the room through the microphone to make your panels pulse.</string>
+    <key>CFBundleDevelopmentRegion</key><string>en</string>
+    <key>CFBundleLocalizations</key><array><string>en</string><string>fr</string></array>
     <key>LSApplicationCategoryType</key><string>public.app-category.utilities</string>
     <key>NSHighResolutionCapable</key><true/>
 </dict>
 </plist>
+EOF
+
+# The microphone request, in the language of macOS.
+mkdir -p "$APP/Contents/Resources/fr.lproj"
+cat > "$APP/Contents/Resources/fr.lproj/InfoPlist.strings" <<EOF
+"NSMicrophoneUsageDescription" = "Sur macOS 12, le mode Musique écoute la pièce avec le micro pour faire pulser tes panneaux.";
 EOF
 
 # Ad hoc signature: macOS keeps the Screen Recording permission across

@@ -4002,7 +4002,7 @@ checksum = "4050469837a6ff301cd14c1f8f24f88549e6d548f24f64e2148eb0f72cebc51f"
 
 [[package]]
 name = "lscsync-app"
-version = "0.1.1"
+version = "0.2.0"
 dependencies = [
  "embed-resource",
  "gpui-kit",
@@ -4015,13 +4015,17 @@ dependencies = [
  "objc2-app-kit 0.3.2",
  "objc2-foundation 0.3.2",
  "qrcode",
+ "rust-i18n",
+ "serde",
+ "sys-locale",
  "tracing",
  "tracing-subscriber",
+ "ureq",
 ]
 
 [[package]]
 name = "lscsync-cli"
-version = "0.1.1"
+version = "0.2.0"
 dependencies = [
  "lscsync-cloud",
  "lscsync-core",
@@ -4034,7 +4038,7 @@ dependencies = [
 
 [[package]]
 name = "lscsync-cloud"
-version = "0.1.1"
+version = "0.2.0"
 dependencies = [
  "aes-gcm",
  "base64 0.22.1",
@@ -4051,7 +4055,7 @@ dependencies = [
 
 [[package]]
 name = "lscsync-core"
-version = "0.1.1"
+version = "0.2.0"
 dependencies = [
  "base64 0.22.1",
  "serde",
@@ -4061,7 +4065,7 @@ dependencies = [
 
 [[package]]
 name = "lscsync-engine"
-version = "0.1.1"
+version = "0.2.0"
 dependencies = [
  "block2 0.6.2",
  "cpal",
@@ -4082,7 +4086,7 @@ dependencies = [
 
 [[package]]
 name = "lscsync-platform"
-version = "0.1.1"
+version = "0.2.0"
 dependencies = [
  "directories",
 ]

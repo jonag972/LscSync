@@ -1,10 +1,15 @@
-//! Windows: embeds the app icon in the `.exe` (Explorer, taskbar, Alt+Tab).
-//! Nothing to do on other platforms.
+//! Rebuilds when a translation changes (rust-i18n reads `locales/` at compile
+//! time). Windows: embeds the app icon in the `.exe` (Explorer, taskbar,
+//! Alt+Tab).
 
 use std::path::PathBuf;
 
 fn main() {
     let manifest_dir = PathBuf::from(std::env::var("CARGO_MANIFEST_DIR").unwrap());
+    println!(
+        "cargo:rerun-if-changed={}",
+        manifest_dir.join("locales").display()
+    );
     // Repository root without `..` or canonicalize (which yields `\\?\C:\…`,
     // rejected by rc.exe).
     let root = manifest_dir.parent().and_then(|p| p.parent()).unwrap();

@@ -1,5 +1,9 @@
 //! Main window: the panels' light is the only color in the app.
 
+// Windows: a GUI app, without a console window. Debug builds keep the console
+// for the logs.
+#![cfg_attr(all(windows, not(debug_assertions)), windows_subsystem = "windows")]
+
 use std::borrow::Cow;
 use std::sync::LazyLock;
 use std::sync::mpsc::{self, Receiver};
@@ -10,16 +14,23 @@ use gpui_kit::component::{Theme, ThemeMode};
 use gpui_kit::prelude::FluentBuilder as _;
 use gpui_kit::*;
 use gpui_tray::{Icon, Tray};
-use lscsync_core::{Hsv, Mode, Profile, Snapshot};
+use lscsync_core::{Hsv, Mode, Preferences, Profile, Snapshot};
 use lscsync_engine::tuya::LscConfig;
 use lscsync_engine::worker::{EngineEvent, EngineHandle, ErrorKind};
-use lscsync_platform::{legacy_settings_path, profile_path};
+use lscsync_platform::{legacy_settings_path, preferences_path, profile_path};
+use rust_i18n::t;
 
 mod devices;
+mod preferences;
 mod setup;
 mod theme;
+mod updates;
 
 use theme::*;
+use updates::UpdateState;
+
+// Interface texts, from crates/app/locales (compiled in).
+rust_i18n::i18n!("locales", fallback = "en");
 
 actions!(
     lscsync,
@@ -27,6 +38,8 @@ actions!(
         Quit,
         ShowWindow,
         ShowDevices,
+        ShowSettings,
+        OpenUpdate,
         CloseWindow,
         ToggleSync,
         ModeAmbilight,
@@ -56,6 +69,8 @@ struct TrayModel {
     phase: Phase,
     mode: Mode,
     status: String,
+    /// Version of an available update.
+    update: Option<String>,
 }
 
 impl Global for TrayModel {}
@@ -73,10 +88,23 @@ enum Phase {
 enum Page {
     Sync,
     Devices,
+    Settings,
+}
+
+/// What the menu bar shows; it is rebuilt when this changes.
+#[derive(Clone, PartialEq)]
+struct TrayKey {
+    phase: Phase,
+    mode: Mode,
+    update: Option<String>,
+    locale: String,
 }
 
 struct Root {
     profile: Profile,
+    /// This computer's language and update preferences (not exported).
+    preferences: Preferences,
+    update: UpdateState,
     page: Page,
     /// First-run or reconnection flow, shown instead of the page.
     setup: Option<Entity<setup::SetupFlow>>,
@@ -102,7 +130,7 @@ struct Root {
     reactivity: Entity<SliderState>,
     audio_min_light: Entity<SliderState>,
     /// Last state shown in the menu bar, to refresh it only on change.
-    tray_shown: Option<(Phase, Mode)>,
+    tray_shown: Option<TrayKey>,
     _subscriptions: Vec<Subscription>,
 }
 
@@ -151,10 +179,15 @@ impl Root {
         }));
 
         Self::spawn_poll(cx);
+        Self::spawn_update_checks(cx);
 
+        let preferences = Preferences::load(&preferences_path());
+        apply_language(&preferences);
         let needs_setup = profile.sync_target().is_none();
         let mut root = Self {
             profile,
+            preferences,
+            update: UpdateState::NotChecked,
             page: Page::Sync,
             setup: None,
             notice: None,
@@ -254,26 +287,40 @@ impl Root {
 
     /// Updates the menu bar icon and menu when the state changes.
     fn sync_tray(&mut self, cx: &mut Context<Self>) {
-        let shown = (self.phase(), self.profile.settings.mode);
-        if self.tray_shown == Some(shown) {
+        let shown = TrayKey {
+            phase: self.phase(),
+            mode: self.profile.settings.mode,
+            update: self
+                .update
+                .available()
+                .map(|release| release.version.clone()),
+            locale: rust_i18n::locale().to_string(),
+        };
+        if self.tray_shown.as_ref() == Some(&shown) {
             return;
         }
         let Some(tray) = cx.try_global::<AppState>().and_then(|s| s.tray.clone()) else {
             return;
         };
-        self.tray_shown = Some(shown);
-        let (phase, mode) = shown;
+        self.tray_shown = Some(shown.clone());
+        let TrayKey {
+            phase,
+            mode,
+            update,
+            ..
+        } = shown;
         let status = match phase {
-            Phase::Idle => "En pause".to_owned(),
-            Phase::Connecting => "Connexion aux panneaux…".to_owned(),
-            Phase::Running => format!("Synchronisé · {}", mode_label(mode)),
+            Phase::Idle => t!("status.paused").to_string(),
+            Phase::Connecting => t!("status.connecting_panels").to_string(),
+            Phase::Running => t!("status.synced_mode", mode = mode_label(mode)).to_string(),
             Phase::Failed => self.describe_error().0,
         };
-        let _ = tray.set_tooltip(Some(format!("LscSync — {status}")), cx);
+        let _ = tray.set_tooltip(Some(t!("status.tooltip", status = status).to_string()), cx);
         cx.set_global(TrayModel {
             phase,
             mode,
             status,
+            update,
         });
         if let Err(error) = tray_icon(phase).and_then(|icon| tray.set_icon(icon, cx)) {
             tracing::warn!("menu bar icon: {error}");
@@ -316,7 +363,7 @@ impl Root {
         self.save();
         self.error = None;
         let Some(device) = self.profile.sync_target().map(LscConfig::from) else {
-            self.error = Some((ErrorKind::NotConfigured, "no device configured".to_owned()));
+            self.error = Some((ErrorKind::NotConfigured, String::new()));
             cx.notify();
             return;
         };
@@ -412,10 +459,10 @@ impl Root {
 
     fn render_header(&self, phase: Phase) -> Div {
         let (dot, label) = match phase {
-            Phase::Idle => (TEXT_FAINT, "En pause"),
-            Phase::Connecting => (ACCENT, "Connexion…"),
-            Phase::Running => (SUCCESS, "Synchronisé"),
-            Phase::Failed => (DANGER_TEXT, "Erreur"),
+            Phase::Idle => (TEXT_FAINT, t!("status.paused")),
+            Phase::Connecting => (ACCENT, t!("status.connecting")),
+            Phase::Running => (SUCCESS, t!("status.synced")),
+            Phase::Failed => (DANGER_TEXT, t!("status.error")),
         };
         div()
             .flex()
@@ -435,7 +482,7 @@ impl Root {
                     .text_size(px(11.5))
                     .text_color(rgb(TEXT_MUTED))
                     .child(div().size(px(6.0)).rounded_full().bg(rgb(dot)))
-                    .child(label),
+                    .child(label.to_string()),
             )
     }
 
@@ -449,15 +496,9 @@ impl Root {
             .bg(rgb(SURFACE))
             .border_1()
             .border_color(rgb(LINE))
-            .child(mode_pill("Ambilight", Mode::ScreenZones, current, true, cx))
-            .child(mode_pill("Couleur", Mode::Screen, current, true, cx))
-            .child(mode_pill(
-                "Musique",
-                Mode::Audio,
-                current,
-                *AUDIO_SUPPORTED,
-                cx,
-            ))
+            .child(mode_pill(Mode::ScreenZones, current, true, cx))
+            .child(mode_pill(Mode::Screen, current, true, cx))
+            .child(mode_pill(Mode::Audio, current, *AUDIO_SUPPORTED, cx))
     }
 
     fn render_hero(&self, phase: Phase) -> Div {
@@ -474,10 +515,10 @@ impl Root {
                     Mode::ScreenZones | Mode::Audio => snapshot.zones.to_vec(),
                 };
                 let tag = match self.profile.settings.mode {
-                    Mode::ScreenZones => "3 zones · écran",
-                    Mode::Screen => "1 couleur · écran",
-                    Mode::Audio if *MUSIC_VIA_MICROPHONE => "Basses · micro",
-                    Mode::Audio => "Basses · 3 zones",
+                    Mode::ScreenZones => t!("hero.zones_screen"),
+                    Mode::Screen => t!("hero.color_screen"),
+                    Mode::Audio if *MUSIC_VIA_MICROPHONE => t!("hero.bass_microphone"),
+                    Mode::Audio => t!("hero.bass_zones"),
                 };
                 hero.child(
                     color_bands(colors.into_iter().map(display_color), px(16.0))
@@ -495,7 +536,7 @@ impl Root {
                         .bg(rgba(0x00000066))
                         .text_size(px(11.0))
                         .text_color(rgb(0xFFFFFF))
-                        .child(tag),
+                        .child(tag.to_string()),
                 )
             }
             _ => {
@@ -508,15 +549,15 @@ impl Root {
                         SURFACE,
                         LINE,
                         TEXT,
-                        "Connexion aux panneaux…".to_owned(),
+                        t!("status.connecting_panels").to_string(),
                         self.device_ip(),
                     ),
                     _ => (
                         SURFACE,
                         LINE,
                         TEXT,
-                        "Panneaux en pause".to_owned(),
-                        "Lance la synchro pour les piloter.".to_owned(),
+                        t!("hero.paused_title").to_string(),
+                        t!("hero.paused_body").to_string(),
                     ),
                 };
                 hero.flex()
@@ -548,10 +589,10 @@ impl Root {
 
     fn render_primary(&self, phase: Phase, cx: &mut Context<Self>) -> Stateful<Div> {
         let (label, filled) = match phase {
-            Phase::Idle => ("Démarrer la synchro", true),
-            Phase::Failed => ("Réessayer", true),
-            Phase::Connecting => ("Annuler", false),
-            Phase::Running => ("Arrêter", false),
+            Phase::Idle => (t!("action.start"), true),
+            Phase::Failed => (t!("action.retry"), true),
+            Phase::Connecting => (t!("action.cancel"), false),
+            Phase::Running => (t!("action.stop"), false),
         };
         div()
             .id("primary")
@@ -584,38 +625,62 @@ impl Root {
             .when(phase == Phase::Running, |button| {
                 button.child(div().size(px(8.0)).rounded(px(2.0)).bg(rgb(TEXT)))
             })
-            .child(label)
+            .child(label.to_string())
     }
 
     fn render_settings(&self, cx: &Context<Self>) -> Div {
         let percent = |v: f32| format!("{}%", v.round() as u32);
         let rows = div().flex().flex_col();
-        let rows = rows.child(setting("Luminosité", &self.lum_max, cx, percent));
+        let rows = rows.child(setting(
+            &t!("tuning.brightness"),
+            &self.lum_max,
+            cx,
+            percent,
+        ));
         let rows = if self.profile.settings.mode == Mode::Audio {
-            rows.child(setting("Réactivité", &self.reactivity, cx, percent))
-                .child(setting("Lueur min.", &self.audio_min_light, cx, percent))
-                .when(*MUSIC_VIA_MICROPHONE, |rows| {
-                    // macOS 12 cannot capture the computer's sound without a
-                    // driver: say so, and how to get the best of the microphone.
-                    rows.child(
-                        div()
-                            .mt(px(6.0))
-                            .text_size(px(11.5))
-                            .line_height(px(17.0))
-                            .text_color(rgb(TEXT_MUTED))
-                            .child(
-                                "Sur macOS 12, le mode Musique écoute avec le micro du Mac : \
-                                 le son de la pièce compte aussi. Monte le volume des enceintes \
-                                 pour de meilleures basses (macOS 13 capte le son directement).",
-                            ),
-                    )
-                })
+            rows.child(setting(
+                &t!("tuning.reactivity"),
+                &self.reactivity,
+                cx,
+                percent,
+            ))
+            .child(setting(
+                &t!("tuning.min_glow"),
+                &self.audio_min_light,
+                cx,
+                percent,
+            ))
+            .when(*MUSIC_VIA_MICROPHONE, |rows| {
+                // macOS 12 cannot capture the computer's sound without a
+                // driver: say so, and how to get the best of the microphone.
+                rows.child(
+                    div()
+                        .mt(px(6.0))
+                        .text_size(px(11.5))
+                        .line_height(px(17.0))
+                        .text_color(rgb(TEXT_MUTED))
+                        .child(t!("tuning.microphone_note").to_string()),
+                )
+            })
         } else {
-            rows.child(setting("Saturation", &self.boost_sat, cx, |v| {
-                format!("×{:.1}", v / 10.0)
-            }))
-            .child(setting("Fluidité", &self.smoothing, cx, percent))
-            .child(setting("Hauteur", &self.capture_height, cx, percent))
+            rows.child(setting(
+                &t!("tuning.saturation"),
+                &self.boost_sat,
+                cx,
+                |v| format!("×{:.1}", v / 10.0),
+            ))
+            .child(setting(
+                &t!("tuning.smoothing"),
+                &self.smoothing,
+                cx,
+                percent,
+            ))
+            .child(setting(
+                &t!("tuning.height"),
+                &self.capture_height,
+                cx,
+                percent,
+            ))
         };
         div()
             .flex()
@@ -625,7 +690,7 @@ impl Root {
                 div()
                     .text_size(px(11.0))
                     .text_color(rgb(TEXT_FAINT))
-                    .child("RÉGLAGES"),
+                    .child(t!("tuning.heading").to_string()),
             )
             .child(rows)
     }
@@ -644,8 +709,8 @@ impl Root {
                 link(
                     "devices",
                     match self.profile.sync_target() {
-                        Some(device) => format!("Appareils · {}", device.name),
-                        None => "Appareils".to_owned(),
+                        Some(device) => t!("footer.devices_named", name = device.name).to_string(),
+                        None => t!("footer.devices").to_string(),
                     },
                 )
                 .text_size(px(11.5))
@@ -656,11 +721,24 @@ impl Root {
             )
             .child(
                 div()
-                    .id("quit")
-                    .cursor_pointer()
-                    .hover(|style| style.text_color(rgb(TEXT_MUTED)))
-                    .on_click(|_, _, cx| cx.quit())
-                    .child("Quitter"),
+                    .flex()
+                    .gap(px(16.0))
+                    .child(
+                        link("settings", t!("footer.settings").to_string())
+                            .text_size(px(11.5))
+                            .on_click(cx.listener(|this, _, _, cx| {
+                                this.page = Page::Settings;
+                                cx.notify();
+                            })),
+                    )
+                    .child(
+                        div()
+                            .id("quit")
+                            .cursor_pointer()
+                            .hover(|style| style.text_color(rgb(TEXT_MUTED)))
+                            .on_click(|_, _, cx| cx.quit())
+                            .child(t!("footer.quit").to_string()),
+                    ),
             )
     }
 }
@@ -691,13 +769,21 @@ impl Render for Root {
         if let Some(setup) = &self.setup {
             return shell.child(setup.clone());
         }
-        if self.page == Page::Devices {
-            return shell.child(self.render_devices(cx));
+        match self.page {
+            Page::Devices => return shell.child(self.render_devices(cx)),
+            Page::Settings => return shell.child(self.render_preferences(cx)),
+            Page::Sync => {}
         }
         let phase = self.phase();
+        let notice = self.render_update_notice(cx);
+        // The notice takes some of the header's breathing room.
+        let below_header = if notice.is_some() { 12.0 } else { 18.0 };
         shell
             .child(self.render_header(phase))
-            .child(div().h(px(18.0)))
+            .when_some(notice, |shell, notice| {
+                shell.child(div().h(px(14.0))).child(notice)
+            })
+            .child(div().h(px(below_header)))
             .child(self.render_modes(cx))
             .child(div().h(px(14.0)))
             .child(self.render_hero(phase))
@@ -732,21 +818,25 @@ fn load_profile() -> Profile {
 }
 
 fn mode_pill(
-    label: &'static str,
     target: Mode,
     current: Mode,
     available: bool,
     cx: &mut Context<Root>,
 ) -> Stateful<Div> {
+    let id = match target {
+        Mode::ScreenZones => "ambilight",
+        Mode::Screen => "color",
+        Mode::Audio => "music",
+    };
     let pill = div()
-        .id(label)
+        .id(id)
         .flex_1()
         .flex()
         .justify_center()
         .py(px(7.0))
         .rounded(px(8.0))
         .text_size(px(12.5))
-        .child(label);
+        .child(mode_label(target));
 
     if !available {
         return pill.text_color(rgb(TEXT_FAINT));
@@ -818,53 +908,54 @@ fn display_color(color: Hsv) -> Rgba {
     rgb((channel(c.r) << 16) | (channel(c.g) << 8) | channel(c.b))
 }
 
-/// Turns an engine error into a title and an actionable explanation.
+/// Turns an engine error into a title and an actionable explanation. The
+/// engine's own messages stay in English: they are only shown when nothing
+/// more helpful can be said.
 fn describe_error(kind: ErrorKind, message: &str, ip: &str) -> (String, String) {
-    const PERMISSION: &str = "Autorise LscSync dans Réglages Système › Confidentialité et sécurité › Enregistrement de l'écran et de l'audio système.";
     let (title, body) = match kind {
         ErrorKind::NotConfigured => (
-            "Aucun appareil configuré",
-            "Connecte tes appareils LSC pour démarrer.".to_owned(),
+            t!("error.not_configured_title"),
+            t!("error.not_configured_body"),
         ),
         ErrorKind::Unreachable => (
-            "Panneaux injoignables",
-            format!(
-                "Pas de réponse de {ip} en 10 s. Vérifie qu'ils sont allumés et sur le même réseau."
-            ),
+            t!("error.unreachable_title"),
+            t!("error.unreachable_body", ip = ip),
         ),
         ErrorKind::ScreenCapture => (
-            "Capture d'écran impossible",
+            t!("error.screen_title"),
             if cfg!(target_os = "macos") {
-                PERMISSION.to_owned()
+                t!("error.screen_permission")
             } else {
-                message.to_owned()
+                message.to_owned().into()
             },
         ),
-        ErrorKind::Audio if !*AUDIO_SUPPORTED => (
-            "Son indisponible",
-            "Le mode Musique n'est pas encore disponible sur ce système.".to_owned(),
-        ),
+        ErrorKind::Audio if !*AUDIO_SUPPORTED => {
+            (t!("error.sound_title"), t!("error.sound_unsupported"))
+        }
         ErrorKind::Audio if *MUSIC_VIA_MICROPHONE => (
-            "Micro inaccessible",
-            "Autorise LscSync dans Réglages Système › Confidentialité et sécurité › Micro."
-                .to_owned(),
+            t!("error.microphone_title"),
+            t!("error.microphone_permission"),
         ),
-        ErrorKind::Audio => ("Son indisponible", PERMISSION.to_owned()),
-        ErrorKind::Device => (
-            "Connexion refusée par les panneaux",
-            "Leur clé a peut-être changé : reconnecte tes appareils.".to_owned(),
-        ),
-        ErrorKind::Other => ("Une erreur est survenue", message.to_owned()),
+        ErrorKind::Audio => (t!("error.sound_title"), t!("error.screen_permission")),
+        ErrorKind::Device => (t!("error.device_title"), t!("error.device_body")),
+        ErrorKind::Other => (t!("error.other_title"), message.to_owned().into()),
     };
-    (title.to_owned(), body)
+    (title.to_string(), body.to_string())
 }
 
-fn mode_label(mode: Mode) -> &'static str {
+fn mode_label(mode: Mode) -> String {
     match mode {
-        Mode::ScreenZones => "Ambilight",
-        Mode::Screen => "Couleur",
-        Mode::Audio => "Musique",
+        Mode::ScreenZones => t!("mode.ambilight"),
+        Mode::Screen => t!("mode.color"),
+        Mode::Audio => t!("mode.music"),
     }
+    .to_string()
+}
+
+/// Shows the interface in the preferred language, or the system's.
+fn apply_language(preferences: &Preferences) {
+    let system = sys_locale::get_locale();
+    rust_i18n::set_locale(preferences.language.locale(system.as_deref()));
 }
 
 /// No title next to the icon, to keep the macOS menu bar clean. On Windows,
@@ -872,46 +963,67 @@ fn mode_label(mode: Mode) -> &'static str {
 fn build_tray(cx: &mut App) -> gpui_tray::Result<Tray> {
     Tray::builder()
         .icon(tray_icon(Phase::Idle)?)
-        .tooltip("LscSync — En pause")
+        .tooltip(t!("status.tooltip", status = t!("status.paused")).to_string())
         .on_activate(ShowWindow)
         .menu(tray_menu)
         .build(cx)
 }
 
 fn tray_menu(cx: &mut App) -> Vec<MenuItem> {
-    let (phase, mode, status) = match cx.try_global::<TrayModel>() {
-        Some(model) => (model.phase, model.mode, model.status.clone()),
-        None => (Phase::Idle, Mode::ScreenZones, "En pause".to_owned()),
+    let (phase, mode, status, update) = match cx.try_global::<TrayModel>() {
+        Some(model) => (
+            model.phase,
+            model.mode,
+            model.status.clone(),
+            model.update.clone(),
+        ),
+        None => (
+            Phase::Idle,
+            Mode::ScreenZones,
+            t!("status.paused").to_string(),
+            None,
+        ),
     };
     let toggle = match phase {
-        Phase::Idle => "Démarrer la synchro",
-        Phase::Failed => "Réessayer",
-        Phase::Connecting => "Annuler la connexion",
-        Phase::Running => "Arrêter la synchro",
+        Phase::Idle => t!("menu.start"),
+        Phase::Failed => t!("menu.retry"),
+        Phase::Connecting => t!("menu.cancel"),
+        Phase::Running => t!("menu.stop"),
     };
-    vec![
+    let mut items = vec![
         MenuItem::action(status, Noop).disabled(true),
         MenuItem::separator(),
-        MenuItem::action(toggle, ToggleSync),
+        MenuItem::action(toggle.to_string(), ToggleSync),
         MenuItem::separator(),
-        MenuItem::action("Ambilight", ModeAmbilight).checked(mode == Mode::ScreenZones),
-        MenuItem::action("Couleur", ModeColor).checked(mode == Mode::Screen),
+        MenuItem::action(mode_label(Mode::ScreenZones), ModeAmbilight)
+            .checked(mode == Mode::ScreenZones),
+        MenuItem::action(mode_label(Mode::Screen), ModeColor).checked(mode == Mode::Screen),
         MenuItem::action(
             if *AUDIO_SUPPORTED {
-                "Musique"
+                mode_label(Mode::Audio)
             } else {
-                "Musique (indisponible sur ce système)"
+                t!("menu.music_unavailable").to_string()
             },
             ModeMusic,
         )
         .checked(mode == Mode::Audio)
         .disabled(!*AUDIO_SUPPORTED),
         MenuItem::separator(),
-        MenuItem::action("Ouvrir LscSync", ShowWindow),
-        MenuItem::action("Appareils…", ShowDevices),
+        MenuItem::action(t!("menu.open").to_string(), ShowWindow),
+        MenuItem::action(t!("menu.devices").to_string(), ShowDevices),
+        MenuItem::action(t!("menu.settings").to_string(), ShowSettings),
+    ];
+    if let Some(version) = update {
+        items.push(MenuItem::action(
+            t!("menu.update", version = version).to_string(),
+            OpenUpdate,
+        ));
+    }
+    items.extend([
         MenuItem::separator(),
-        MenuItem::action("Quitter LscSync", Quit),
-    ]
+        MenuItem::action(t!("menu.quit").to_string(), Quit),
+    ]);
+    items
 }
 
 /// Hand-drawn glyph: a screen with three rays of light above it (the
@@ -974,6 +1086,18 @@ fn segment(x: f32, y: f32, [ax, ay, bx, by]: [f32; 4], radius: f32) -> f32 {
     let (dx, dy) = (bx - ax, by - ay);
     let t = (((x - ax) * dx + (y - ay) * dy) / (dx * dx + dy * dy)).clamp(0.0, 1.0);
     (x - ax - t * dx).hypot(y - ay - t * dy) - radius
+}
+
+/// Opens the window on a page (from the menu bar), unless the setup flow is
+/// in progress.
+fn show_page(page: Page, cx: &mut App) {
+    with_root(cx, |root, cx| {
+        if root.setup.is_none() {
+            root.page = page;
+            cx.notify();
+        }
+    });
+    show_window(cx);
 }
 
 fn with_root(cx: &mut App, update: impl FnOnce(&mut Root, &mut Context<Root>)) {
@@ -1054,9 +1178,9 @@ fn set_dock_icon() {}
 
 fn app_menus() -> Vec<Menu> {
     vec![Menu::new("LscSync").items([
-        MenuItem::action("Fermer la fenêtre", CloseWindow),
+        MenuItem::action(t!("menu.close_window").to_string(), CloseWindow),
         MenuItem::separator(),
-        MenuItem::action("Quitter LscSync", Quit),
+        MenuItem::action(t!("menu.quit").to_string(), Quit),
     ])]
 }
 
@@ -1102,14 +1226,19 @@ fn main() {
             apply_theme(cx);
             cx.on_action(|_: &Quit, cx| cx.quit());
             cx.on_action(|_: &ShowWindow, cx| show_window(cx));
-            cx.on_action(|_: &ShowDevices, cx| {
-                with_root(cx, |root, cx| {
-                    if root.setup.is_none() {
-                        root.page = Page::Devices;
-                        cx.notify();
-                    }
-                });
-                show_window(cx);
+            cx.on_action(|_: &ShowDevices, cx| show_page(Page::Devices, cx));
+            cx.on_action(|_: &ShowSettings, cx| show_page(Page::Settings, cx));
+            cx.on_action(|_: &OpenUpdate, cx| {
+                let url = cx
+                    .global::<AppState>()
+                    .root
+                    .read(cx)
+                    .update
+                    .available()
+                    .map(|r| r.url.clone());
+                if let Some(url) = url {
+                    cx.open_url(&url);
+                }
             });
             cx.on_action(|_: &CloseWindow, cx| {
                 if let Some(window) = cx.global::<AppState>().window {
@@ -1126,7 +1255,6 @@ fn main() {
                 KeyBinding::new(quit, Quit, None),
                 KeyBinding::new(close, CloseWindow, None),
             ]);
-            cx.set_menus(app_menus());
             cx.on_action(|_: &Noop, _| {});
             cx.on_action(|_: &ToggleSync, cx| with_root(cx, |root, cx| root.primary_action(cx)));
             cx.on_action(|_: &ModeAmbilight, cx| {
@@ -1141,7 +1269,9 @@ fn main() {
                 }
             });
 
+            // Root::new picks the language: the menus come after it.
             let root = cx.new(Root::new);
+            cx.set_menus(app_menus());
             cx.set_global(AppState {
                 tray: None,
                 window: None,

@@ -111,11 +111,11 @@ pub fn link(id: impl Into<ElementId>, label: impl Into<SharedString>) -> Statefu
         .child(label.into())
 }
 
-pub fn step_label(text: &'static str) -> Div {
+pub fn step_label(text: impl Into<SharedString>) -> Div {
     div()
         .text_size(px(11.0))
         .text_color(rgb(TEXT_FAINT))
-        .child(text)
+        .child(text.into())
 }
 
 pub fn title(text: impl Into<SharedString>) -> Div {

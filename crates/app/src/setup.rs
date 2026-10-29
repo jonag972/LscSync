@@ -10,6 +10,7 @@ use gpui_kit::*;
 use lscsync_cloud::{CloudError, QrLogin};
 use lscsync_core::Device;
 use lscsync_engine::tuya::scan_local_network_blocking;
+use rust_i18n::t;
 
 use crate::theme::*;
 
@@ -105,8 +106,9 @@ impl SetupFlow {
         let input = match &self.user_code {
             Some(input) => input.clone(),
             None => {
-                let input =
-                    cx.new(|cx| InputState::new(window, cx).placeholder("Code utilisateur"));
+                let input = cx.new(|cx| {
+                    InputState::new(window, cx).placeholder(t!("setup.code_placeholder"))
+                });
                 self._subscriptions.push(cx.subscribe(
                     &input,
                     |this: &mut Self, _, event: &InputEvent, cx| {
@@ -136,7 +138,7 @@ impl SetupFlow {
         if code.is_empty() {
             self.step = Step::UserCode {
                 busy: false,
-                error: Some("Saisis ton code utilisateur.".to_owned()),
+                error: Some(t!("setup.code_missing").to_string()),
             };
             cx.notify();
             return;
@@ -183,7 +185,7 @@ impl SetupFlow {
         let Some(qr) = Qr::new(&login.qr_content()) else {
             self.step = Step::UserCode {
                 busy: false,
-                error: Some("Impossible d'afficher le QR code.".to_owned()),
+                error: Some(t!("setup.qr_unavailable").to_string()),
             };
             cx.notify();
             return;
@@ -217,7 +219,7 @@ impl SetupFlow {
                     Ok(None) if Instant::now() < deadline => continue,
                     Ok(None) => {
                         let _ = this.update(cx, |flow, cx| {
-                            flow.scan_failed(attempt, "Le QR code a expiré.".to_owned(), cx)
+                            flow.scan_failed(attempt, t!("setup.scan_expired").to_string(), cx)
                         });
                         return;
                     }
@@ -320,26 +322,25 @@ impl SetupFlow {
                     .justify_center()
                     .gap(px(10.0))
                     .child(app_logo(px(96.0)))
-                    .child(title("Bienvenue dans LscSync"))
+                    .child(title(t!("setup.welcome_title").to_string()))
                     .child(
-                        body("Connecte tes appareils LSC Smart Connect en une minute, avec l'app LSC de ton téléphone.")
+                        body(t!("setup.welcome_body").to_string())
                             .text_center()
                             .max_w(px(300.0)),
                     ),
             )
             .child(
-                button("connect", "Connecter mes appareils", true).on_click(cx.listener(
-                    |this, _, window, cx| this.go_to_code(window, cx),
-                )),
+                button("connect", t!("setup.connect").to_string(), true)
+                    .on_click(cx.listener(|this, _, window, cx| this.go_to_code(window, cx))),
             )
             .child(
-                button("import", "Importer un profil", false)
+                button("import", t!("setup.import").to_string(), false)
                     .on_click(cx.listener(|_, _, _, cx| cx.emit(SetupEvent::ImportRequested))),
             )
             .when(self.cancellable, |this| {
                 this.child(
                     div().flex().justify_center().child(
-                        link("cancel", "Annuler")
+                        link("cancel", t!("action.cancel").to_string())
                             .on_click(cx.listener(|_, _, _, cx| cx.emit(SetupEvent::Cancelled))),
                     ),
                 )
@@ -352,15 +353,15 @@ impl SetupFlow {
             .flex_col()
             .gap(px(12.0))
             .flex_1()
-            .child(step_label("ÉTAPE 1 SUR 2"))
-            .child(title("Ton code utilisateur LSC"))
+            .child(step_label(t!("setup.step_1").to_string()))
+            .child(title(t!("setup.code_title").to_string()))
             .child(
                 card().child(
                     div()
                         .text_size(px(12.5))
                         .line_height(px(19.0))
                         .text_color(rgb(TEXT_SOFT))
-                        .child("Dans l'app LSC Smart Connect : Moi › Paramètres › Compte et sécurité › Code utilisateur."),
+                        .child(t!("setup.code_where").to_string()),
                 ),
             );
         if let Some(input) = &self.user_code {
@@ -370,14 +371,16 @@ impl SetupFlow {
             .when_some(error, |this, error| {
                 this.child(error_text(error.to_owned()))
             })
-            .child(body(
-                "Ce code n'est envoyé qu'à Tuya, le temps de la connexion.",
-            ))
+            .child(body(t!("setup.code_privacy").to_string()))
             .child(div().flex_1())
             .child(
                 button(
                     "continue",
-                    if busy { "Connexion…" } else { "Continuer" },
+                    if busy {
+                        t!("setup.connecting").to_string()
+                    } else {
+                        t!("setup.continue").to_string()
+                    },
                     true,
                 )
                 .on_click(cx.listener(move |this, _, _, cx| {
@@ -386,18 +389,15 @@ impl SetupFlow {
                     }
                 })),
             )
-            .child(
-                div()
-                    .flex()
-                    .justify_center()
-                    .child(
-                        link("back", "Retour").on_click(cx.listener(|this, _, _, cx| {
-                            this.attempt += 1;
-                            this.step = Step::Welcome;
-                            cx.notify();
-                        })),
-                    ),
-            )
+            .child(div().flex().justify_center().child(
+                link("back", t!("action.back").to_string()).on_click(cx.listener(
+                    |this, _, _, cx| {
+                        this.attempt += 1;
+                        this.step = Step::Welcome;
+                        cx.notify();
+                    },
+                )),
+            ))
     }
 
     fn render_scan(&self, qr: &Qr, status: &ScanStatus, cx: &mut Context<Self>) -> Div {
@@ -416,8 +416,8 @@ impl SetupFlow {
             }));
 
         let status_row = match status {
-            ScanStatus::Waiting => status_line(ACCENT, "En attente du scan…"),
-            ScanStatus::Fetching => status_line(SUCCESS, "Récupération de tes appareils…"),
+            ScanStatus::Waiting => status_line(ACCENT, &t!("setup.scan_waiting")),
+            ScanStatus::Fetching => status_line(SUCCESS, &t!("setup.scan_fetching")),
             ScanStatus::Failed(message) => status_line(DANGER_TEXT, message),
         };
 
@@ -426,23 +426,21 @@ impl SetupFlow {
             .flex_col()
             .gap(px(12.0))
             .flex_1()
-            .child(step_label("ÉTAPE 2 SUR 2"))
-            .child(title("Scanne ce code avec l'app LSC"))
+            .child(step_label(t!("setup.step_2").to_string()))
+            .child(title(t!("setup.scan_title").to_string()))
             .child(div().flex().justify_center().child(grid))
-            .child(body(
-                "App LSC › Moi › icône de scan en haut à droite, puis confirme la connexion.",
-            ))
+            .child(body(t!("setup.scan_where").to_string()))
             .child(status_row)
             .child(div().flex_1())
             .when(matches!(status, ScanStatus::Failed(_)), |this| {
                 this.child(
-                    button("retry", "Nouveau QR code", true)
+                    button("retry", t!("setup.new_qr").to_string(), true)
                         .on_click(cx.listener(|this, _, _, cx| this.submit_code(cx))),
                 )
             })
             .child(
                 div().flex().justify_center().child(
-                    link("back", "Retour")
+                    link("back", t!("action.back").to_string())
                         .on_click(cx.listener(|this, _, window, cx| this.go_to_code(window, cx))),
                 ),
             )
@@ -465,37 +463,31 @@ impl SetupFlow {
             ));
         }
 
-        let content = div()
-            .flex()
-            .flex_col()
-            .gap(px(12.0))
-            .flex_1()
-            .child(title(match count {
-                0 => "Aucun appareil sur ce compte".to_owned(),
-                1 => "1 appareil sur ton compte".to_owned(),
-                n => format!("{n} appareils sur ton compte"),
-            }));
+        let content = div().flex().flex_col().gap(px(12.0)).flex_1().child(title(
+            match count {
+                0 => t!("setup.found_none"),
+                1 => t!("setup.found_one"),
+                n => t!("setup.found_many", count = n),
+            }
+            .to_string(),
+        ));
 
         if count == 0 {
             return content
-                .child(body(
-                    "Ajoute d'abord tes appareils dans l'app LSC Smart Connect, puis réessaie.",
-                ))
+                .child(body(t!("setup.found_none_body").to_string()))
                 .child(div().flex_1())
                 .child(
-                    button("retry", "Réessayer", true)
+                    button("retry", t!("action.retry").to_string(), true)
                         .on_click(cx.listener(|this, _, window, cx| this.go_to_code(window, cx))),
                 );
         }
 
         content
             .child(list)
-            .child(body(
-                "Choisis l'appareil qui suit ton écran. Les clés restent sur cet ordinateur.",
-            ))
+            .child(body(t!("setup.found_body").to_string()))
             .child(div().flex_1())
             .child(
-                button("done", "C'est parti", true)
+                button("done", t!("setup.done").to_string(), true)
                     .on_click(cx.listener(|this, _, _, cx| this.finish(cx))),
             )
     }
@@ -559,7 +551,7 @@ pub fn device_row(
                     .text_size(px(10.5))
                     .font_weight(FontWeight::SEMIBOLD)
                     .text_color(rgb(ON_ACCENT))
-                    .child("Synchro"),
+                    .child(t!("device.sync_tag").to_string()),
             )
         })
         .child(
@@ -570,7 +562,7 @@ pub fn device_row(
                 .child(if online {
                     device.ip.clone()
                 } else {
-                    "hors ligne".to_owned()
+                    t!("device.offline").to_string()
                 }),
         )
 }
@@ -590,14 +582,9 @@ fn status_line(dot: u32, text: &str) -> Div {
 /// User-facing explanation of a login failure.
 fn login_error(error: &CloudError) -> String {
     match error {
-        CloudError::Network(_) => {
-            "Pas de connexion à Internet : vérifie ta connexion et réessaie.".to_owned()
-        }
-        CloudError::Refused { .. } => {
-            "Code utilisateur refusé : vérifie-le dans l'app LSC Smart Connect.".to_owned()
-        }
-        CloudError::Response(_) => {
-            "Réponse inattendue de Tuya, réessaie dans un instant.".to_owned()
-        }
+        CloudError::Network(_) => t!("setup.error_network"),
+        CloudError::Refused { .. } => t!("setup.error_refused"),
+        CloudError::Response(_) => t!("setup.error_response"),
     }
+    .to_string()
 }

@@ -73,6 +73,46 @@ pub fn top_row(count: usize, height: f32) -> Vec<Zone> {
         .collect()
 }
 
+/// What Tuya says a device can do, fetched at the QR login.
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct Capabilities {
+    /// Tuya's identifier of the product model.
+    #[serde(default)]
+    pub product_key: String,
+    /// Codes of its standard functions (`colour_data`, `music_data`…).
+    #[serde(default)]
+    pub functions: Vec<String>,
+    /// DP ids of those codes on the local network.
+    #[serde(default)]
+    pub data_points: Vec<DataPoint>,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct DataPoint {
+    pub id: u32,
+    pub code: String,
+}
+
+impl Capabilities {
+    pub fn has(&self, code: &str) -> bool {
+        self.functions.iter().any(|function| function == code)
+            || self.data_points.iter().any(|point| point.code == code)
+    }
+}
+
+/// How a single color is sent to a light.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ColorCommand {
+    /// DP 27 (`music_data`, direct mode): applied instantly.
+    Direct,
+    /// DP 24 (`colour_data`): every color light has it, but it fades.
+    Fade,
+}
+
+/// Tuya's product key of the LSC light panel kit.
+const PANELS_PRODUCT_KEY: &str = "duxmr5beo0hrowle";
+
 /// How a device is driven, from what is known about its product.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Product {
@@ -85,13 +125,15 @@ pub enum Product {
 }
 
 impl Product {
-    /// Recognized by the product name until the profile stores Tuya's
-    /// product key.
+    /// Recognized by Tuya's product key, or by the product name for devices
+    /// added before the app fetched it.
     pub fn of(device: &Device) -> Self {
-        if device
-            .product
-            .trim()
-            .eq_ignore_ascii_case("Smart panel lights")
+        let key = device.capabilities.as_ref().map(|c| c.product_key.as_str());
+        if key == Some(PANELS_PRODUCT_KEY)
+            || device
+                .product
+                .trim()
+                .eq_ignore_ascii_case("Smart panel lights")
         {
             Self::Panels
         } else {
@@ -134,6 +176,27 @@ impl Device {
         } else {
             product.default_zones(top_height)
         }
+    }
+
+    /// Ways to send the device a single color, best first: the instant one
+    /// when Tuya says it has the music function, the fading one in any case.
+    pub fn color_commands(&self) -> Vec<ColorCommand> {
+        let direct = Product::of(self) == Product::Panels
+            || self
+                .capabilities
+                .as_ref()
+                .is_some_and(|capabilities| capabilities.has("music_data"));
+        if direct {
+            vec![ColorCommand::Direct, ColorCommand::Fade]
+        } else {
+            vec![ColorCommand::Fade]
+        }
+    }
+
+    /// The calibrated command, or else the best one Tuya's description allows.
+    pub fn color_command(&self) -> ColorCommand {
+        self.color_command
+            .unwrap_or_else(|| self.color_commands()[0])
     }
 
     /// The layout with `count` zones: the first ones keep their place, new
@@ -186,6 +249,20 @@ mod tests {
         assert_eq!(more.len(), 8);
         assert_eq!(more[0], placed);
         assert_eq!(device.layout_with(2, 0.3), vec![placed, device.zones[1]]);
+    }
+
+    #[test]
+    fn music_function_allows_instant_colors() {
+        let mut light: Device =
+            serde_json::from_str(r#"{"id": "b", "name": "Bar", "local_key": "k"}"#).unwrap();
+        assert_eq!(light.color_command(), ColorCommand::Fade);
+        light.capabilities = Some(Capabilities {
+            functions: vec!["colour_data".to_owned(), "music_data".to_owned()],
+            ..Capabilities::default()
+        });
+        assert_eq!(light.color_command(), ColorCommand::Direct);
+        light.color_command = Some(ColorCommand::Fade);
+        assert_eq!(light.color_command(), ColorCommand::Fade);
     }
 
     #[test]

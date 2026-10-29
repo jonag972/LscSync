@@ -8,7 +8,7 @@ use std::path::Path;
 
 use serde::{Deserialize, Serialize};
 
-use crate::layout::Zone;
+use crate::layout::{Capabilities, ColorCommand, Zone};
 use crate::settings::Settings;
 
 /// Format version written by this version of the app.
@@ -33,6 +33,12 @@ pub struct Device {
     /// layout (see [`Device::layout`]).
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub zones: Vec<Zone>,
+    /// What Tuya says it can do (fetched at login).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub capabilities: Option<Capabilities>,
+    /// How its color is sent, once calibrated by the user.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub color_command: Option<ColorCommand>,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -116,6 +122,8 @@ impl Profile {
                 category: String::new(),
                 synced: true,
                 zones: Vec::new(),
+                capabilities: None,
+                color_command: None,
             });
         }
         Ok(profile)
@@ -193,6 +201,10 @@ impl Profile {
                     }
                     device.synced = known.synced;
                     device.zones = std::mem::take(&mut known.zones);
+                    device.color_command = known.color_command;
+                    if device.capabilities.is_none() {
+                        device.capabilities = known.capabilities.take();
+                    }
                     *known = device;
                 }
                 None => self.devices.push(device),
@@ -228,6 +240,8 @@ mod tests {
             category: "dd".to_owned(),
             synced: false,
             zones: Vec::new(),
+            capabilities: None,
+            color_command: None,
         }
     }
 

@@ -6,8 +6,8 @@
 use std::sync::atomic::{AtomicBool, AtomicU8, Ordering};
 use std::time::Duration;
 
-use lscsync_core::Hsv;
 use lscsync_core::protocol;
+use lscsync_core::{ColorCommand, Hsv};
 use rustuya::tokio::{Device, Discovery, Listener, Version};
 use thiserror::Error;
 
@@ -61,6 +61,37 @@ pub fn scan_local_network_blocking(window: Duration) -> Result<Vec<(String, Stri
         .build()
         .map_err(|error| LscError::Io(error.to_string()))?
         .block_on(scan_local_network(window))
+}
+
+/// Calibration: switches a light between red and blue for `duration` with
+/// `command`, then back to white, so the user can tell whether it fades.
+/// Blocking.
+pub fn flip_colors_blocking(
+    config: &LscConfig,
+    command: ColorCommand,
+    duration: Duration,
+) -> Result<(), LscError> {
+    let runtime = tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()
+        .map_err(|error| LscError::Io(error.to_string()))?;
+    runtime.block_on(async {
+        let lsc = Lsc::connect(config, Duration::from_secs(10)).await?;
+        let start = std::time::Instant::now();
+        let mut red = true;
+        while start.elapsed() < duration {
+            let color = Hsv::new(if red { 0.0 } else { 2.0 / 3.0 }, 1.0, 1.0);
+            match command {
+                ColorCommand::Direct => lsc.send_direct(color).await?,
+                ColorCommand::Fade => lsc.send_color(color).await?,
+            }
+            red = !red;
+            tokio::time::sleep(Duration::from_millis(400)).await;
+        }
+        lsc.restore_white().await?;
+        lsc.close().await;
+        Ok(())
+    })
 }
 
 pub struct Lsc {

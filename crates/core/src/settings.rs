@@ -25,6 +25,19 @@ pub enum AudioHue {
     Fixed,
 }
 
+/// What the screen modes do when the picture goes dark.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum DarkScenes {
+    /// The lights go dark with the picture.
+    #[default]
+    Follow,
+    /// The lights keep the last color they had.
+    Hold,
+    /// The lights keep that color and fade out slowly.
+    Dim,
+}
+
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(default)]
 pub struct Settings {
@@ -53,6 +66,16 @@ pub struct Settings {
     pub restore_white: bool,
     #[serde(alias = "inverser_zones")]
     pub invert_zones: bool,
+    /// Screen modes: the lights never go below this brightness (0 to 1).
+    #[serde(rename = "screen_min_brightness")]
+    pub screen_min_light: f32,
+    pub dark_scenes: DarkScenes,
+    /// How much a vivid pixel outweighs a gray one in a zone's color.
+    pub vivid_priority: f32,
+    /// Widens the brightness gaps between zones (0 to 1).
+    pub contrast: f32,
+    /// Screen captures per second.
+    pub frame_rate: u8,
 }
 
 impl Default for Settings {
@@ -71,6 +94,11 @@ impl Default for Settings {
             audio_zones: false,
             restore_white: true,
             invert_zones: false,
+            screen_min_light: 0.0,
+            dark_scenes: DarkScenes::Follow,
+            vivid_priority: 4.3,
+            contrast: 0.0,
+            frame_rate: 25,
         }
     }
 }

@@ -165,12 +165,19 @@ impl Image {
     }
 }
 
+/// Dominant color of a zone, with the default vividness priority.
+pub fn dominant_color(pixels: &[Rgb]) -> Rgb {
+    dominant_color_with(pixels, (1.0 + GRAY_WEIGHT) / GRAY_WEIGHT)
+}
+
 /// Dominant color of a zone.
 ///
 /// Average weighted by vividness (saturation × brightness): black bars, text
-/// and gray backgrounds no longer wash out the hue. Brightness itself stays
-/// that of the whole zone.
-pub fn dominant_color(pixels: &[Rgb]) -> Rgb {
+/// and gray backgrounds no longer wash out the hue. A fully vivid pixel
+/// weighs `vivid_priority` times a gray one (1: a plain average). Brightness
+/// itself stays that of the whole zone.
+pub fn dominant_color_with(pixels: &[Rgb], vivid_priority: f32) -> Rgb {
+    let gray_weight = 1.0 / (vivid_priority - 1.0).max(0.001);
     if pixels.is_empty() {
         return Rgb::BLACK;
     }
@@ -182,7 +189,7 @@ pub fn dominant_color(pixels: &[Rgb]) -> Rgb {
     for pixel in pixels {
         let max = pixel.r.max(pixel.g).max(pixel.b);
         let min = pixel.r.min(pixel.g).min(pixel.b);
-        let weight = (max - min) + GRAY_WEIGHT;
+        let weight = (max - min) + gray_weight;
 
         weight_sum += weight;
         weighted[0] += pixel.r * weight;

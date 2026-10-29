@@ -10,8 +10,10 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc::{self, Receiver, Sender};
 use std::time::{Duration, Instant};
 
-use lscsync_core::color::{dominant_color, to_lamp};
-use lscsync_core::{AudioHue, Hsv, Mode, Product, Rgb, Settings, Snapshot, Zone};
+use lscsync_core::color::{dominant_color_with, to_lamp};
+use lscsync_core::{
+    AudioHue, ColorCommand, DarkScenes, Hsv, Mode, Product, Rgb, Settings, Snapshot, Zone,
+};
 use thiserror::Error;
 use tokio::sync::watch;
 use tokio::task::JoinHandle;
@@ -19,7 +21,6 @@ use tokio::task::JoinHandle;
 use crate::capture::{CaptureError, ScreenCapture};
 use crate::tuya::{Lsc, LscConfig, LscError};
 
-const FRAME_PERIOD: Duration = Duration::from_millis(40); // 25 Hz
 const CONNECT_TIMEOUT: Duration = Duration::from_secs(10);
 
 // A color is only sent again when it changed at least this much.
@@ -29,6 +30,11 @@ const BRIGHTNESS_THRESHOLD: f32 = 0.04;
 
 /// Pause after a device stopped answering, before trying again.
 const DEVICE_BACKOFF: Duration = Duration::from_secs(3);
+/// Below this share of the brightness setting, a zone counts as dark.
+const DARK: f32 = 0.06;
+/// Each frame, a fading color keeps this much of its brightness (Dim).
+const DIM_FACTOR: f32 = 0.96;
+
 /// Single-color updates per second for lights that fade (DP 24).
 const LIGHT_UPDATES_PER_SECOND: f64 = 10.0;
 
@@ -79,6 +85,8 @@ pub struct Target {
     pub name: String,
     pub product: Product,
     pub zones: Vec<Zone>,
+    /// How a single color is sent to a light.
+    pub color: ColorCommand,
 }
 
 impl Target {
@@ -89,6 +97,7 @@ impl Target {
             name: device.name.clone(),
             product: Product::of(device),
             zones: device.layout(top_height),
+            color: device.color_command(),
         }
     }
 }
@@ -220,8 +229,6 @@ enum Frame {
     Zones(Vec<Hsv>),
     /// One color everywhere (Color mode).
     Color(Hsv),
-    /// Left / middle / right, applied instantly (Music mode on the panels).
-    Scene { zones: [Hsv; 3], invert: bool },
 }
 
 /// A connected device: its task, the channel feeding it, its zones.
@@ -231,6 +238,8 @@ struct Link {
     zones: Vec<Zone>,
     /// Smoothed zone colors, before conversion for the lamp.
     smoothed: Vec<Rgb>,
+    /// Last colors shown before the picture went dark (Hold and Dim).
+    lit: Vec<Hsv>,
     frames: watch::Sender<Option<Frame>>,
     task: JoinHandle<Lsc>,
 }
@@ -242,6 +251,7 @@ pub struct Engine {
     links: Vec<Link>,
     highlight: Option<(String, usize)>,
     smoothed_top: Option<Rgb>,
+    lit_top: Vec<Hsv>,
     audio: Option<crate::audio::PlatformAudioCapture>,
     bass: crate::audio::BassProcessor,
     frames: u64,
@@ -317,6 +327,7 @@ impl Engine {
             links,
             highlight: None,
             smoothed_top: None,
+            lit_top: Vec::new(),
             audio,
             bass: crate::audio::BassProcessor::new(),
             frames: 0,
@@ -333,6 +344,7 @@ impl Engine {
         let task = runtime.spawn(drive(
             lsc,
             target.product,
+            target.color,
             target.name.clone(),
             receiver,
             events,
@@ -341,6 +353,7 @@ impl Engine {
             id: target.config.device_id,
             product: target.product,
             smoothed: Vec::new(),
+            lit: Vec::new(),
             zones: target.zones,
             frames,
             task,
@@ -365,7 +378,7 @@ impl Engine {
             // Screen modes: fixed period. Music mode: reading the audio block
             // already paces the loop (~50 Hz), no extra sleep.
             if self.settings.mode != Mode::Audio
-                && let Some(rest) = FRAME_PERIOD.checked_sub(frame_start.elapsed())
+                && let Some(rest) = self.frame_period().checked_sub(frame_start.elapsed())
             {
                 std::thread::sleep(rest);
             }
@@ -379,7 +392,7 @@ impl Engine {
         while start.elapsed() < duration {
             let frame_start = Instant::now();
             self.tick()?;
-            if let Some(rest) = FRAME_PERIOD.checked_sub(frame_start.elapsed()) {
+            if let Some(rest) = self.frame_period().checked_sub(frame_start.elapsed()) {
                 std::thread::sleep(rest);
             }
         }
@@ -387,6 +400,10 @@ impl Engine {
             frames: self.frames,
             elapsed: start.elapsed(),
         })
+    }
+
+    fn frame_period(&self) -> Duration {
+        Duration::from_secs_f32(1.0 / self.settings.frame_rate.clamp(5, 60) as f32)
     }
 
     fn apply(&mut self, update: Update) {
@@ -426,7 +443,7 @@ impl Engine {
             let colors: Vec<Rgb> = link
                 .zones
                 .iter()
-                .map(|zone| dominant_color(&image.region(*zone)))
+                .map(|zone| dominant_color_with(&image.region(*zone), self.settings.vivid_priority))
                 .collect();
             link.smoothed = if link.smoothed.len() == colors.len() {
                 link.smoothed
@@ -448,6 +465,7 @@ impl Engine {
                     )
                 })
                 .collect();
+            shape(&mut lamp, &mut link.lit, &self.settings);
             if let Some((device, zone)) = &self.highlight
                 && *device == link.id
                 && let Some(color) = lamp.get_mut(*zone)
@@ -466,17 +484,22 @@ impl Engine {
 
     fn tick_color(&mut self) -> Result<Snapshot, EngineError> {
         let image = self.capture.capture()?;
-        let color = dominant_color(&image.top_band(self.settings.capture_height).pixels);
+        let color = dominant_color_with(
+            &image.top_band(self.settings.capture_height).pixels,
+            self.settings.vivid_priority,
+        );
         let alpha = 1.0 - self.settings.smoothing;
         let smoothed = self
             .smoothed_top
             .map_or(color, |previous| blend(previous, color, alpha));
         self.smoothed_top = Some(smoothed);
-        let lamp = to_lamp(
+        let mut lamp = [to_lamp(
             smoothed,
             self.settings.boost_sat,
             self.settings.lum_max as f32,
-        );
+        )];
+        shape(&mut lamp, &mut self.lit_top, &self.settings);
+        let [lamp] = lamp;
         for link in &self.links {
             link.frames.send_replace(Some(Frame::Color(lamp)));
         }
@@ -509,11 +532,16 @@ impl Engine {
         let zones = self.bass.process(&samples, hue, self.settings.audio_zones);
         for link in &self.links {
             let frame = match link.product {
-                // DP 51 is applied instantly: what the bass needs.
-                Product::Panels => Frame::Scene {
-                    zones,
-                    invert: self.settings.invert_zones,
-                },
+                // The 3 music zones spread over the panels, left to right,
+                // through the instant DP 51 scene: what the bass needs.
+                Product::Panels => {
+                    let count = link.zones.len().max(1);
+                    Frame::Zones(
+                        (0..count)
+                            .map(|panel| zones[panel * zones.len() / count])
+                            .collect(),
+                    )
+                }
                 Product::Light => Frame::Color(zones[0]),
             };
             link.frames.send_replace(Some(frame));
@@ -551,6 +579,40 @@ impl Engine {
                 lsc.close().await;
             }
         });
+    }
+}
+
+/// Contrast, dark scenes and the brightness floor of the screen modes,
+/// applied to one device's zones. `lit` remembers the last bright colors.
+fn shape(colors: &mut [Hsv], lit: &mut Vec<Hsv>, settings: &Settings) {
+    if lit.len() != colors.len() {
+        *lit = colors.to_vec();
+    }
+    let max_v = colors.iter().map(|color| color.v).fold(0.0_f32, f32::max);
+    if settings.contrast > 0.0 && max_v > 0.0 {
+        let exponent = 1.0 + 2.0 * settings.contrast;
+        for color in colors.iter_mut() {
+            color.v = max_v * (color.v / max_v).powf(exponent);
+        }
+    }
+    let scale = settings.lum_max as f32 / 100.0;
+    for (color, lit) in colors.iter_mut().zip(lit.iter_mut()) {
+        if color.v >= DARK * scale {
+            *lit = *color;
+            continue;
+        }
+        match settings.dark_scenes {
+            DarkScenes::Follow => *lit = *color,
+            DarkScenes::Hold => *color = *lit,
+            DarkScenes::Dim => {
+                lit.v *= DIM_FACTOR;
+                *color = *lit;
+            }
+        }
+    }
+    let floor = settings.screen_min_light * scale;
+    for color in colors {
+        color.v = color.v.max(floor);
     }
 }
 
@@ -597,6 +659,7 @@ impl Pace {
 async fn drive(
     lsc: Lsc,
     product: Product,
+    command: ColorCommand,
     name: String,
     mut frames: watch::Receiver<Option<Frame>>,
     events: Option<Sender<EngineEvent>>,
@@ -630,25 +693,21 @@ async fn drive(
                     lsc.send_scene_panels(colors).await
                 }
             }
-            (Frame::Scene { zones, invert }, Product::Panels) => {
-                last_zones = None;
-                last_single = None;
-                lsc.send_zones(zones, *invert).await
-            }
             _ => {
                 let color = match &frame {
                     Frame::Color(color) => *color,
                     Frame::Zones(colors) => colors.first().copied().unwrap_or_default(),
-                    Frame::Scene { zones, .. } => zones[0],
                 };
                 last_zones = None;
                 if last_single.is_some_and(|last| !differs(last, color)) {
                     Ok(())
                 } else {
                     last_single = Some(color);
-                    match product {
-                        Product::Panels => lsc.send_direct(color).await,
-                        Product::Light => {
+                    match (product, command) {
+                        (Product::Panels, _) | (Product::Light, ColorCommand::Direct) => {
+                            lsc.send_direct(color).await
+                        }
+                        (Product::Light, ColorCommand::Fade) => {
                             light_pace.wait().await;
                             lsc.send_color(color).await
                         }
@@ -676,4 +735,59 @@ async fn drive(
         }
     }
     lsc
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    const RED: Hsv = Hsv::new(0.0, 1.0, 0.8);
+    const DARK_GRAY: Hsv = Hsv::new(0.5, 0.1, 0.01);
+
+    fn settings(dark_scenes: DarkScenes) -> Settings {
+        Settings {
+            dark_scenes,
+            ..Settings::default()
+        }
+    }
+
+    #[test]
+    fn dark_scenes_follow_hold_or_fade() {
+        let mut lit = Vec::new();
+        let mut colors = [RED];
+        shape(&mut colors, &mut lit, &settings(DarkScenes::Hold));
+        let mut dark = [DARK_GRAY];
+        shape(&mut dark, &mut lit, &settings(DarkScenes::Follow));
+        assert_eq!(dark, [DARK_GRAY]);
+
+        let mut lit = vec![RED];
+        let mut dark = [DARK_GRAY];
+        shape(&mut dark, &mut lit, &settings(DarkScenes::Hold));
+        assert_eq!(dark, [RED]);
+
+        let mut dark = [DARK_GRAY];
+        shape(&mut dark, &mut lit, &settings(DarkScenes::Dim));
+        assert_eq!(dark[0].h, RED.h);
+        assert!(dark[0].v < RED.v);
+    }
+
+    #[test]
+    fn brightness_floor_and_contrast() {
+        let mut colors = [DARK_GRAY, RED];
+        let floor = Settings {
+            screen_min_light: 0.2,
+            ..Settings::default()
+        };
+        shape(&mut colors, &mut Vec::new(), &floor);
+        assert!((colors[0].v - 0.2).abs() < 1e-6);
+
+        let mut colors = [Hsv::new(0.0, 1.0, 0.4), RED];
+        let contrast = Settings {
+            contrast: 1.0,
+            ..Settings::default()
+        };
+        shape(&mut colors, &mut Vec::new(), &contrast);
+        assert!(colors[0].v < 0.4);
+        assert_eq!(colors[1].v, RED.v);
+    }
 }

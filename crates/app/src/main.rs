@@ -9,7 +9,7 @@ use std::sync::LazyLock;
 use std::sync::mpsc::{self, Receiver};
 use std::time::Duration;
 
-use gpui_kit::component::slider::{Slider, SliderEvent, SliderState, SliderValue};
+use gpui_kit::component::slider::{SliderEvent, SliderState};
 use gpui_kit::component::{Theme, ThemeMode};
 use gpui_kit::prelude::FluentBuilder as _;
 use gpui_kit::*;
@@ -23,6 +23,7 @@ mod devices;
 mod preferences;
 mod setup;
 mod theme;
+mod tuning;
 mod updates;
 mod zones;
 
@@ -125,6 +126,8 @@ struct Root {
     selected_zone: Option<usize>,
     /// Synced devices that do not answer.
     unreachable: Vec<String>,
+    /// Calibration in progress on a device's page.
+    calibration: Option<zones::Calibration>,
     engine: Option<EngineHandle>,
     /// Stopped engine whose thread finishes in the background (back to white).
     retiring: Option<EngineHandle>,
@@ -132,13 +135,10 @@ struct Root {
     snapshot: Option<Snapshot>,
     /// Last engine error, kept until the next start.
     error: Option<(ErrorKind, String)>,
-    // Sliders
-    lum_max: Entity<SliderState>,
-    boost_sat: Entity<SliderState>,
-    smoothing: Entity<SliderState>,
-    capture_height: Entity<SliderState>,
-    reactivity: Entity<SliderState>,
-    audio_min_light: Entity<SliderState>,
+    /// One slider per adjustment, shown or not depending on the mode.
+    sliders: Vec<(tuning::Knob, Entity<SliderState>)>,
+    /// The Advanced adjustments are unfolded.
+    advanced_open: bool,
     /// Last state shown in the menu bar, to refresh it only on change.
     tray_shown: Option<TrayKey>,
     _subscriptions: Vec<Subscription>,
@@ -152,37 +152,15 @@ impl Root {
         }
         let settings = &profile.settings;
 
-        let slider = |cx: &mut Context<Self>, min: f32, max: f32, step: f32, value: f32| {
-            cx.new(|_| {
-                SliderState::new()
-                    .min(min)
-                    .max(max)
-                    .step(step)
-                    .default_value(value)
+        let sliders = tuning::sliders(settings, cx);
+        let mut subscriptions: Vec<Subscription> = sliders
+            .iter()
+            .map(|(_, state)| {
+                cx.subscribe(state, |this: &mut Self, _, event: &SliderEvent, cx| {
+                    this.on_slider(event, cx)
+                })
             })
-        };
-        let lum_max = slider(cx, 10.0, 100.0, 5.0, settings.lum_max as f32);
-        let boost_sat = slider(cx, 10.0, 25.0, 1.0, settings.boost_sat * 10.0);
-        let smoothing = slider(cx, 0.0, 90.0, 5.0, settings.smoothing * 100.0);
-        let capture_height = slider(cx, 10.0, 100.0, 5.0, settings.capture_height * 100.0);
-        let reactivity = slider(cx, 10.0, 90.0, 5.0, settings.reactivity * 100.0);
-        let audio_min_light = slider(cx, 0.0, 20.0, 1.0, settings.audio_min_light * 100.0);
-
-        let mut subscriptions: Vec<Subscription> = [
-            &lum_max,
-            &boost_sat,
-            &smoothing,
-            &capture_height,
-            &reactivity,
-            &audio_min_light,
-        ]
-        .into_iter()
-        .map(|state| {
-            cx.subscribe(state, |this: &mut Self, _, event: &SliderEvent, cx| {
-                this.on_slider(event, cx)
-            })
-        })
-        .collect();
+            .collect();
         subscriptions.push(cx.on_app_quit(|this, _| {
             this.shutdown();
             async {}
@@ -208,17 +186,14 @@ impl Root {
             drag: None,
             selected_zone: None,
             unreachable: Vec::new(),
+            calibration: None,
             engine: None,
             retiring: None,
             events: None,
             snapshot: None,
             error: None,
-            lum_max,
-            boost_sat,
-            smoothing,
-            capture_height,
-            reactivity,
-            audio_min_light,
+            sliders,
+            advanced_open: false,
             tray_shown: None,
             _subscriptions: subscriptions,
         };
@@ -226,23 +201,6 @@ impl Root {
             root.open_setup(false, None, cx);
         }
         root
-    }
-
-    /// Moves the sliders to the profile's settings (after an import).
-    fn sync_sliders(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        let settings = &self.profile.settings;
-        let values = [
-            (&self.lum_max, settings.lum_max as f32),
-            (&self.boost_sat, settings.boost_sat * 10.0),
-            (&self.smoothing, settings.smoothing * 100.0),
-            (&self.capture_height, settings.capture_height * 100.0),
-            (&self.reactivity, settings.reactivity * 100.0),
-            (&self.audio_min_light, settings.audio_min_light * 100.0),
-        ];
-        for (slider, value) in values {
-            slider.update(cx, |slider, cx| slider.set_value(value, window, cx));
-        }
-        self.sliders_stale = false;
     }
 
     /// The profile was replaced: refresh the sliders on the next render.
@@ -462,16 +420,6 @@ impl Root {
         cx.notify();
     }
 
-    /// Reads the sliders into the settings.
-    fn read_sliders(&mut self, cx: &App) {
-        self.profile.settings.lum_max = slider_value(&self.lum_max, cx) as u8;
-        self.profile.settings.boost_sat = slider_value(&self.boost_sat, cx) / 10.0;
-        self.profile.settings.smoothing = slider_value(&self.smoothing, cx) / 100.0;
-        self.profile.settings.capture_height = slider_value(&self.capture_height, cx) / 100.0;
-        self.profile.settings.reactivity = slider_value(&self.reactivity, cx) / 100.0;
-        self.profile.settings.audio_min_light = slider_value(&self.audio_min_light, cx) / 100.0;
-    }
-
     fn save(&self) {
         if let Err(error) = self.profile.save(&profile_path()) {
             tracing::warn!("profile not saved: {error}");
@@ -661,76 +609,6 @@ impl Root {
             .child(label.to_string())
     }
 
-    fn render_settings(&self, cx: &Context<Self>) -> Div {
-        let percent = |v: f32| format!("{}%", v.round() as u32);
-        let rows = div().flex().flex_col();
-        let rows = rows.child(setting(
-            &t!("tuning.brightness"),
-            &self.lum_max,
-            cx,
-            percent,
-        ));
-        let rows = if self.profile.settings.mode == Mode::Audio {
-            rows.child(setting(
-                &t!("tuning.reactivity"),
-                &self.reactivity,
-                cx,
-                percent,
-            ))
-            .child(setting(
-                &t!("tuning.min_glow"),
-                &self.audio_min_light,
-                cx,
-                percent,
-            ))
-            .when(*MUSIC_VIA_MICROPHONE, |rows| {
-                // macOS 12 cannot capture the computer's sound without a
-                // driver: say so, and how to get the best of the microphone.
-                rows.child(
-                    div()
-                        .mt(px(6.0))
-                        .text_size(px(11.5))
-                        .line_height(px(17.0))
-                        .text_color(rgb(TEXT_MUTED))
-                        .child(t!("tuning.microphone_note").to_string()),
-                )
-            })
-        } else {
-            rows.child(setting(
-                &t!("tuning.saturation"),
-                &self.boost_sat,
-                cx,
-                |v| format!("×{:.1}", v / 10.0),
-            ))
-            .child(setting(
-                &t!("tuning.smoothing"),
-                &self.smoothing,
-                cx,
-                percent,
-            ))
-            // Ambilight: each zone's height is set on its device's page.
-            .when(self.profile.settings.mode == Mode::Screen, |rows| {
-                rows.child(setting(
-                    &t!("tuning.height"),
-                    &self.capture_height,
-                    cx,
-                    percent,
-                ))
-            })
-        };
-        div()
-            .flex()
-            .flex_col()
-            .gap(px(4.0))
-            .child(
-                div()
-                    .text_size(px(11.0))
-                    .text_color(rgb(TEXT_FAINT))
-                    .child(t!("tuning.heading").to_string()),
-            )
-            .child(rows)
-    }
-
     fn render_footer(&self, cx: &mut Context<Self>) -> Div {
         div()
             .flex()
@@ -851,8 +729,15 @@ impl Render for Root {
                 },
             )
             .child(div().h(px(22.0)))
-            .child(self.render_settings(cx))
-            .child(div().flex_1())
+            .child(
+                // Scrolls when the Advanced adjustments do not fit.
+                div()
+                    .id("adjustments")
+                    .flex_1()
+                    .min_h(px(0.0))
+                    .overflow_y_scroll()
+                    .child(self.render_settings(cx)),
+            )
             .child(self.render_footer(cx))
     }
 }
@@ -914,51 +799,6 @@ fn mode_pill(
         .text_color(rgb(TEXT_MUTED))
         .hover(|style| style.text_color(rgb(TEXT)).bg(rgb(SURFACE_HOVER)))
         .on_click(cx.listener(move |this, _, _, cx| this.set_mode(target, cx)))
-}
-
-fn setting(
-    label: &str,
-    state: &Entity<SliderState>,
-    cx: &Context<Root>,
-    format: impl Fn(f32) -> String,
-) -> Div {
-    let value = slider_value(state, cx);
-    div()
-        .flex()
-        .items_center()
-        .gap(px(12.0))
-        .h(px(38.0))
-        .child(
-            div()
-                .w(px(80.0))
-                .text_size(px(13.0))
-                .text_color(rgb(TEXT_MUTED))
-                .child(label.to_owned()),
-        )
-        .child(
-            Slider::new(state)
-                .horizontal()
-                .flex_1()
-                .bg(rgb(ACCENT))
-                .text_color(rgb(TEXT)),
-        )
-        .child(
-            div()
-                .w(px(40.0))
-                .flex()
-                .justify_end()
-                .font_family(FONT_MONO)
-                .text_size(px(12.0))
-                .text_color(rgb(TEXT_SOFT))
-                .child(format(value)),
-        )
-}
-
-fn slider_value(state: &Entity<SliderState>, cx: &App) -> f32 {
-    match state.read(cx).value() {
-        SliderValue::Single(v) => v,
-        _ => 0.0,
-    }
 }
 
 /// Preview color: same hue as the panels, lightened so it stays readable on

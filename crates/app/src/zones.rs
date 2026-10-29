@@ -5,8 +5,9 @@ use std::sync::Arc;
 
 use gpui_kit::prelude::FluentBuilder as _;
 use gpui_kit::*;
-use lscsync_core::{Product, Zone};
+use lscsync_core::{ColorCommand, Product, Zone};
 use lscsync_engine::capture::ScreenCapture;
+use lscsync_engine::tuya::{LscConfig, flip_colors_blocking};
 use rust_i18n::t;
 
 use crate::theme::*;
@@ -24,6 +25,24 @@ pub struct ScreenPreview {
     image: Arc<Image>,
     /// Height / width.
     ratio: f32,
+}
+
+/// How long the light flips between two colors before the question.
+const CALIBRATION_FLIPS: std::time::Duration = std::time::Duration::from_secs(4);
+
+/// Finding how a light changes color: each candidate command flips the
+/// light between red and blue, then the user says whether it was sharp.
+pub struct Calibration {
+    device: String,
+    /// Commands left to try, the one being tried first.
+    candidates: Vec<ColorCommand>,
+    step: CalibrationStep,
+}
+
+enum CalibrationStep {
+    Flipping,
+    Asking,
+    Done(String),
 }
 
 /// A zone being moved, or resized from its corner.
@@ -70,6 +89,13 @@ impl Root {
     /// Back to the devices page: the highlighted zone goes back to normal.
     fn close_device(&mut self, cx: &mut Context<Self>) {
         self.select_zone(None);
+        if self
+            .calibration
+            .as_ref()
+            .is_some_and(|c| matches!(c.step, CalibrationStep::Done(_)))
+        {
+            self.calibration = None;
+        }
         self.page = Page::Devices;
         cx.notify();
     }
@@ -289,6 +315,9 @@ impl Root {
                                 .child(self.render_count(id, count, counts, cx)),
                         )
                     })
+                    .when(Product::of(device) == Product::Light, |card| {
+                        card.child(self.render_calibration(id, cx))
+                    })
                     .child(row(t!("zones.in_sync").to_string()).child(
                         toggle("in-sync", synced).on_click(cx.listener(move |this, _, _, cx| {
                             this.toggle_synced(&toggle_id, cx);
@@ -372,6 +401,157 @@ impl Root {
         self.selected_zone = None;
         self.set_zones(id, zones);
         self.save();
+    }
+
+    fn start_calibration(&mut self, id: &str, cx: &mut Context<Self>) {
+        let Some(device) = self.profile.devices.iter().find(|d| d.id == id) else {
+            return;
+        };
+        let candidates = device.color_commands();
+        let config = LscConfig::from(device);
+        // The light accepts one connection at a time: the sync lets go first.
+        if self.engine.is_some() {
+            self.stop(cx);
+        }
+        self.calibration = Some(Calibration {
+            device: id.to_owned(),
+            candidates,
+            step: CalibrationStep::Flipping,
+        });
+        self.flip(config, cx);
+    }
+
+    /// Flips the light with the first candidate, then asks.
+    fn flip(&mut self, config: LscConfig, cx: &mut Context<Self>) {
+        let Some(command) = self
+            .calibration
+            .as_ref()
+            .and_then(|calibration| calibration.candidates.first().copied())
+        else {
+            return;
+        };
+        let previous = self.retiring.take();
+        cx.notify();
+        cx.spawn(async move |this, cx| {
+            let flipped = cx
+                .background_executor()
+                .spawn(async move {
+                    drop(previous);
+                    flip_colors_blocking(&config, command, CALIBRATION_FLIPS)
+                })
+                .await;
+            let _ = this.update(cx, |root, cx| {
+                if let Some(calibration) = &mut root.calibration {
+                    calibration.step = match flipped {
+                        Ok(()) => CalibrationStep::Asking,
+                        Err(error) => {
+                            tracing::warn!("calibration: {error}");
+                            CalibrationStep::Done(t!("calibrate.failed").to_string())
+                        }
+                    };
+                }
+                cx.notify();
+            });
+        })
+        .detach();
+    }
+
+    /// The user's answer: sharp keeps the command, otherwise the next one.
+    fn answer_calibration(&mut self, sharp: bool, cx: &mut Context<Self>) {
+        let Some(calibration) = &mut self.calibration else {
+            return;
+        };
+        let id = calibration.device.clone();
+        let tried = calibration.candidates.remove(0);
+        let chosen = if sharp {
+            Some((tried, t!("calibrate.sharp").to_string()))
+        } else if calibration.candidates.is_empty() {
+            Some((tried, t!("calibrate.fades").to_string()))
+        } else {
+            None
+        };
+        match chosen {
+            Some((command, message)) => {
+                calibration.step = CalibrationStep::Done(message);
+                if let Some(device) = self.profile.devices.iter_mut().find(|d| d.id == id) {
+                    device.color_command = Some(command);
+                }
+                self.save();
+                cx.notify();
+            }
+            None => {
+                calibration.step = CalibrationStep::Flipping;
+                let config = self
+                    .profile
+                    .devices
+                    .iter()
+                    .find(|d| d.id == id)
+                    .map(LscConfig::from);
+                if let Some(config) = config {
+                    self.flip(config, cx);
+                }
+            }
+        }
+    }
+
+    /// The calibration row of a light's page.
+    fn render_calibration(&self, id: &str, cx: &mut Context<Self>) -> Div {
+        let current = self.calibration.as_ref().filter(|c| c.device == id);
+        let row = row(t!("calibrate.title").to_string());
+        match current.map(|calibration| &calibration.step) {
+            None | Some(CalibrationStep::Done(_)) => {
+                let id = id.to_owned();
+                let done = current.and_then(|calibration| match &calibration.step {
+                    CalibrationStep::Done(message) => Some(message.clone()),
+                    _ => None,
+                });
+                div()
+                    .flex()
+                    .flex_col()
+                    .gap(px(6.0))
+                    .child(row.child(
+                        link("calibrate", t!("calibrate.start").to_string()).on_click(
+                            cx.listener(move |this, _, _, cx| this.start_calibration(&id, cx)),
+                        ),
+                    ))
+                    .child(body(
+                        done.unwrap_or_else(|| t!("calibrate.why").to_string()),
+                    ))
+            }
+            Some(CalibrationStep::Flipping) => div()
+                .flex()
+                .flex_col()
+                .gap(px(6.0))
+                .child(row)
+                .child(body(t!("calibrate.watch").to_string())),
+            Some(CalibrationStep::Asking) => {
+                div()
+                    .flex()
+                    .flex_col()
+                    .gap(px(8.0))
+                    .child(row)
+                    .child(body(t!("calibrate.question").to_string()))
+                    .child(
+                        div()
+                            .flex()
+                            .gap(px(8.0))
+                            .child(
+                                button("calibrate-yes", t!("calibrate.yes").to_string(), true)
+                                    .flex_1()
+                                    .on_click(cx.listener(|this, _, _, cx| {
+                                        this.answer_calibration(true, cx)
+                                    })),
+                            )
+                            .child(
+                                button("calibrate-no", t!("calibrate.no").to_string(), false)
+                                    .flex_1()
+                                    .on_click(cx.listener(|this, _, _, cx| {
+                                        this.answer_calibration(false, cx)
+                                    })),
+                            ),
+                    )
+            }
+        }
     }
 
     /// Every synced device's zones on the screen, numbered per device.

@@ -67,6 +67,8 @@ impl From<CloudDevice> for lscsync_core::Device {
             category: device.category,
             synced: false,
             zones: Vec::new(),
+            capabilities: None,
+            color_command: None,
         }
     }
 }
@@ -192,16 +194,38 @@ impl Session {
         Ok(devices)
     }
 
-    /// What a device can do: its `functions` (writable) and `status` (readable)
-    /// codes, with their types and value ranges.
-    pub fn specification(&self, device_id: &str) -> Result<Value, CloudError> {
-        self.get(&format!("/v1.1/m/life/{device_id}/specifications"), None)
-    }
-
-    /// How the codes map to the data point (DP) ids used on the local network,
-    /// in `dpStatusRelationDTOS`.
-    pub fn data_points(&self, device_id: &str) -> Result<Value, CloudError> {
-        self.get(&format!("/v1.0/m/life/devices/{device_id}/status"), None)
+    /// What a device can do: its product key, the codes of its standard
+    /// functions, and their DP ids on the local network. Tuya describes only
+    /// standard functions (the panels' DP 51 is missing, for instance).
+    pub fn capabilities(&self, device_id: &str) -> Result<lscsync_core::Capabilities, CloudError> {
+        let specification = self.get(&format!("/v1.1/m/life/{device_id}/specifications"), None)?;
+        let points = self.get(&format!("/v1.0/m/life/devices/{device_id}/status"), None)?;
+        let mut functions: Vec<String> = ["functions", "status"]
+            .iter()
+            .flat_map(|list| specification[*list].as_array().cloned().unwrap_or_default())
+            .filter_map(|function| function["code"].as_str().map(str::to_owned))
+            .collect();
+        functions.sort();
+        functions.dedup();
+        let data_points = points["dpStatusRelationDTOS"]
+            .as_array()
+            .into_iter()
+            .flatten()
+            .filter_map(|point| {
+                Some(lscsync_core::DataPoint {
+                    id: u32::try_from(point["dpId"].as_u64()?).ok()?,
+                    code: point["dpCode"]
+                        .as_str()
+                        .or(point["statusCode"].as_str())?
+                        .to_owned(),
+                })
+            })
+            .collect();
+        Ok(lscsync_core::Capabilities {
+            product_key: points["productKey"].as_str().unwrap_or_default().to_owned(),
+            functions,
+            data_points,
+        })
     }
 
     /// Signed, encrypted GET on the "customer" API; returns the decrypted result.

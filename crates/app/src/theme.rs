@@ -29,7 +29,7 @@ pub const TITLEBAR_INSET: f32 = if cfg!(target_os = "macos") { 28.0 } else { 0.0
 /// Window width, and its height for the main page, the setup flow and the
 /// device pages (they show the screen preview).
 pub const WINDOW_WIDTH: f32 = 400.0;
-pub const MAIN_HEIGHT: f32 = 560.0;
+pub const MAIN_HEIGHT: f32 = 610.0;
 pub const SETUP_HEIGHT: f32 = 450.0;
 pub const DEVICES_HEIGHT: f32 = 690.0;
 

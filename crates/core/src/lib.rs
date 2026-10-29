@@ -14,8 +14,8 @@ pub mod snapshot;
 pub mod version;
 
 pub use color::{Hsv, Image, Rgb};
-pub use layout::{Product, Zone};
+pub use layout::{Capabilities, ColorCommand, DataPoint, Product, Zone};
 pub use preferences::{Language, Preferences};
 pub use profile::{Device, Profile, ProfileError};
-pub use settings::{AudioHue, Mode, Settings};
+pub use settings::{AudioHue, DarkScenes, Mode, Settings};
 pub use snapshot::Snapshot;

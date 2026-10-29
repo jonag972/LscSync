@@ -55,7 +55,7 @@ enum ScanStatus {
 }
 
 /// Devices of the account, and the (id, ip) pairs seen on the local network.
-type Fetched = (Vec<lscsync_cloud::CloudDevice>, Vec<(String, String)>);
+type Fetched = (Vec<Device>, Vec<(String, String)>);
 
 /// QR code as a square grid of dark modules.
 struct Qr {
@@ -242,7 +242,22 @@ impl SetupFlow {
             let fetched = cx
                 .background_executor()
                 .spawn(async move {
-                    let devices = session.devices()?;
+                    let devices = session
+                        .devices()?
+                        .into_iter()
+                        .map(|cloud| {
+                            // Without its description, a device still works
+                            // with the commands every light has.
+                            let capabilities = session
+                                .capabilities(&cloud.id)
+                                .inspect_err(|error| tracing::warn!("{}: {error}", cloud.name))
+                                .ok();
+                            Device {
+                                capabilities,
+                                ..Device::from(cloud)
+                            }
+                        })
+                        .collect();
                     // The LAN scan is a bonus: without it, the engine
                     // rediscovers the address when it connects.
                     let found = scan_local_network_blocking(NETWORK_SCAN).unwrap_or_default();
@@ -281,7 +296,7 @@ impl SetupFlow {
                 return;
             }
         };
-        let mut devices: Vec<Device> = devices.into_iter().map(Device::from).collect();
+        let mut devices = devices;
         for device in &mut devices {
             if let Some((_, ip)) = found.iter().find(|(id, _)| *id == device.id) {
                 device.ip = ip.clone();

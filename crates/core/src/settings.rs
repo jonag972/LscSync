@@ -14,6 +14,13 @@ pub enum Mode {
     Screen,
     #[serde(rename = "music", alias = "audio")]
     Audio,
+    /// A color chosen by hand, nothing captured.
+    #[serde(rename = "fixed")]
+    Fixed,
+}
+
+impl Mode {
+    pub const ALL: [Self; 4] = [Self::ScreenZones, Self::Screen, Self::Audio, Self::Fixed];
 }
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
@@ -76,6 +83,9 @@ pub struct Settings {
     pub contrast: f32,
     /// Screen captures per second.
     pub frame_rate: u8,
+    /// Fixed color mode: hue (0 to 359) and saturation (0 for white).
+    pub fixed_hue: u16,
+    pub fixed_saturation: f32,
 }
 
 impl Default for Settings {
@@ -99,6 +109,8 @@ impl Default for Settings {
             vivid_priority: 4.3,
             contrast: 0.0,
             frame_rate: 25,
+            fixed_hue: 30,
+            fixed_saturation: 1.0,
         }
     }
 }

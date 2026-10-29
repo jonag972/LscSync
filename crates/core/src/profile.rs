@@ -9,7 +9,7 @@ use std::path::Path;
 use serde::{Deserialize, Serialize};
 
 use crate::layout::{Capabilities, ColorCommand, Zone};
-use crate::settings::Settings;
+use crate::settings::{Mode, Settings};
 
 /// Format version written by this version of the app.
 pub const PROFILE_VERSION: u32 = 1;
@@ -26,8 +26,11 @@ pub struct Device {
     pub product: String,
     #[serde(default)]
     pub category: String,
-    /// Follows the screen or the music when the sync runs.
+    /// Modes in which the device follows the sync.
     #[serde(default)]
+    pub modes: Vec<Mode>,
+    /// Before modes were chosen per device: followed the sync in every mode.
+    #[serde(default, skip_serializing)]
     pub synced: bool,
     /// Where each zone looks on the screen; empty for the product's default
     /// layout (see [`Device::layout`]).
@@ -120,7 +123,8 @@ impl Profile {
                 ip: legacy.ip,
                 product: String::new(),
                 category: String::new(),
-                synced: true,
+                modes: Mode::ALL.to_vec(),
+                synced: false,
                 zones: Vec::new(),
                 capabilities: None,
                 color_command: None,
@@ -135,11 +139,20 @@ impl Profile {
             return Err(ProfileError::TooNew);
         }
         // Before multi-device sync, a single device followed the screen.
-        if !profile.devices.iter().any(|device| device.synced)
+        if !profile
+            .devices
+            .iter()
+            .any(|device| device.synced || !device.modes.is_empty())
             && let Some(id) = profile.sync_device.clone()
             && let Some(device) = profile.devices.iter_mut().find(|d| d.id == id)
         {
             device.synced = true;
+        }
+        // Before modes were chosen per device, a synced device followed all.
+        for device in &mut profile.devices {
+            if device.synced && device.modes.is_empty() {
+                device.modes = Mode::ALL.to_vec();
+            }
         }
         Ok(profile)
     }
@@ -164,30 +177,41 @@ impl Profile {
             return Err(ProfileError::Empty);
         }
         profile.version = PROFILE_VERSION;
-        if profile.sync_target().is_none()
-            && let Some(first) = profile.devices.first().map(|d| d.id.clone())
-        {
-            profile.set_synced(&first, true);
-        }
+        profile.ensure_one_synced();
         Ok(profile)
     }
 
-    /// First device of the sync, if any: named in the footer and in errors.
+    /// First device used in some mode, if any: named in errors.
     pub fn sync_target(&self) -> Option<&Device> {
-        self.sync_targets().next()
+        self.devices.iter().find(|device| !device.modes.is_empty())
     }
 
-    /// Devices that follow the screen or the music.
-    pub fn sync_targets(&self) -> impl Iterator<Item = &Device> {
-        self.devices.iter().filter(|device| device.synced)
+    /// Devices that follow the sync in `mode`.
+    pub fn sync_targets(&self, mode: Mode) -> impl Iterator<Item = &Device> {
+        self.devices
+            .iter()
+            .filter(move |device| device.modes.contains(&mode))
     }
 
-    /// Adds or removes a device from the sync.
-    pub fn set_synced(&mut self, id: &str, synced: bool) {
+    /// Adds a device to the sync in `mode`, or removes it.
+    pub fn set_synced(&mut self, id: &str, mode: Mode, synced: bool) {
         if let Some(device) = self.devices.iter_mut().find(|d| d.id == id) {
-            device.synced = synced;
+            device.modes.retain(|m| *m != mode);
+            if synced {
+                device.modes.push(mode);
+            }
         }
         self.sync_device = self.sync_target().map(|device| device.id.clone());
+    }
+
+    /// With devices but none used anywhere, the first one follows every mode.
+    fn ensure_one_synced(&mut self) {
+        if self.sync_target().is_none()
+            && let Some(first) = self.devices.first_mut()
+        {
+            first.modes = Mode::ALL.to_vec();
+            self.sync_device = Some(first.id.clone());
+        }
     }
 
     /// Merges the devices returned by the account: keys and names updated,
@@ -199,7 +223,7 @@ impl Profile {
                     if device.ip.is_empty() {
                         device.ip = std::mem::take(&mut known.ip);
                     }
-                    device.synced = known.synced;
+                    device.modes = std::mem::take(&mut known.modes);
                     device.zones = std::mem::take(&mut known.zones);
                     device.color_command = known.color_command;
                     if device.capabilities.is_none() {
@@ -210,11 +234,7 @@ impl Profile {
                 None => self.devices.push(device),
             }
         }
-        if self.sync_target().is_none()
-            && let Some(first) = self.devices.first().map(|d| d.id.clone())
-        {
-            self.set_synced(&first, true);
-        }
+        self.ensure_one_synced();
     }
 
     /// Updates the local address of a device found on the network.
@@ -238,6 +258,7 @@ mod tests {
             ip: ip.to_owned(),
             product: String::new(),
             category: "dd".to_owned(),
+            modes: Vec::new(),
             synced: false,
             zones: Vec::new(),
             capabilities: None,
@@ -306,8 +327,8 @@ mod tests {
     fn export_then_import() {
         let mut profile = Profile::default();
         profile.merge_devices(vec![device("a", "10.0.0.2"), device("b", "")]);
-        profile.set_synced("a", false);
-        profile.set_synced("b", true);
+        profile.devices[0].modes.clear();
+        profile.set_synced("b", Mode::Audio, true);
         profile.settings.mode = Mode::Screen;
 
         let imported = Profile::from_import(&profile.to_export()).unwrap();
@@ -355,6 +376,24 @@ mod tests {
     }
 
     #[test]
+    fn devices_are_chosen_per_mode() {
+        let mut profile = Profile::default();
+        profile.merge_devices(vec![device("a", ""), device("b", "")]);
+        assert_eq!(profile.devices[0].modes, Mode::ALL);
+        profile.set_synced("b", Mode::Audio, true);
+        profile.set_synced("a", Mode::Audio, false);
+        let music: Vec<&str> = profile
+            .sync_targets(Mode::Audio)
+            .map(|d| d.id.as_str())
+            .collect();
+        let screen: Vec<&str> = profile
+            .sync_targets(Mode::ScreenZones)
+            .map(|d| d.id.as_str())
+            .collect();
+        assert_eq!((music, screen), (vec!["b"], vec!["a"]));
+    }
+
+    #[test]
     fn single_device_profiles_become_synced_devices() {
         let profile = Profile {
             devices: vec![device("a", ""), device("b", "")],
@@ -362,7 +401,11 @@ mod tests {
             ..Profile::default()
         };
         let loaded = Profile::parse(&profile.to_export()).unwrap();
-        let synced: Vec<&str> = loaded.sync_targets().map(|d| d.id.as_str()).collect();
+        let synced: Vec<&str> = loaded
+            .sync_targets(Mode::Screen)
+            .map(|d| d.id.as_str())
+            .collect();
         assert_eq!(synced, ["b"]);
+        assert_eq!(loaded.devices[1].modes, Mode::ALL);
     }
 }

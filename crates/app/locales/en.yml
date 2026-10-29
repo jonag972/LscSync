@@ -16,6 +16,7 @@ mode:
   ambilight: "Ambilight"
   color: "Color"
   music: "Music"
+  fixed: "Color"
 
 hero:
   zones_screen: "3 zones · screen"

@@ -65,6 +65,7 @@ impl From<CloudDevice> for lscsync_core::Device {
             ip: String::new(),
             product: device.product_name.trim().to_owned(),
             category: device.category,
+            modes: Vec::new(),
             synced: false,
             zones: Vec::new(),
             capabilities: None,

@@ -102,7 +102,7 @@ fn load_targets() -> Result<(Vec<Target>, Settings), Box<dyn std::error::Error>>
     lscsync_platform::migrate_legacy_data()?;
     let profile = Profile::load_or_migrate(&profile_path(), &legacy_settings_path())?;
     let targets: Vec<Target> = profile
-        .sync_targets()
+        .sync_targets(profile.settings.mode)
         .map(|device| Target::new(device, profile.settings.capture_height))
         .collect();
     if targets.is_empty() {

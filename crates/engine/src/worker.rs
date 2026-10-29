@@ -12,7 +12,8 @@ use std::time::{Duration, Instant};
 
 use lscsync_core::color::{dominant_color_with, to_lamp};
 use lscsync_core::{
-    AudioHue, ColorCommand, DarkScenes, Hsv, Mode, Product, Rgb, Settings, Snapshot, Zone,
+    AudioHue, ColorCommand, DarkScenes, DeviceColors, Hsv, Mode, Product, Rgb, Settings, Snapshot,
+    Zone,
 };
 use thiserror::Error;
 use tokio::sync::watch;
@@ -247,7 +248,8 @@ struct Link {
 pub struct Engine {
     runtime: tokio::runtime::Runtime,
     settings: Settings,
-    capture: ScreenCapture,
+    /// Screen modes only.
+    capture: Option<ScreenCapture>,
     links: Vec<Link>,
     highlight: Option<(String, usize)>,
     smoothed_top: Option<Rgb>,
@@ -308,7 +310,10 @@ impl Engine {
             return Err(first_error.map_or(EngineError::NotConfigured, EngineError::Lsc));
         }
 
-        let capture = ScreenCapture::new()?;
+        let capture = match settings.mode {
+            Mode::ScreenZones | Mode::Screen => Some(ScreenCapture::new()?),
+            Mode::Audio | Mode::Fixed => None,
+        };
         let audio = if settings.mode == Mode::Audio {
             let mut capture = crate::audio::PlatformAudioCapture::new()
                 .map_err(|e| EngineError::Audio(e.to_string()))?;
@@ -432,13 +437,37 @@ impl Engine {
             Mode::ScreenZones => self.tick_zones(),
             Mode::Screen => self.tick_color(),
             Mode::Audio => self.tick_audio(),
+            Mode::Fixed => Ok(self.tick_fixed()),
         }
     }
 
+    fn capture(&self) -> Result<lscsync_core::Image, EngineError> {
+        let capture = self.capture.as_ref().ok_or(CaptureError::NoMonitor)?;
+        Ok(capture.capture()?)
+    }
+
+    /// The color chosen by hand, on every device.
+    fn tick_fixed(&mut self) -> Snapshot {
+        let color = Hsv::new(
+            self.settings.fixed_hue as f32 / 360.0,
+            self.settings.fixed_saturation,
+            self.settings.lum_max as f32 / 100.0,
+        );
+        let mut devices = Vec::new();
+        for link in &self.links {
+            link.frames.send_replace(Some(Frame::Color(color)));
+            devices.push(DeviceColors {
+                id: link.id.clone(),
+                colors: vec![color; link.zones.len().max(1)],
+            });
+        }
+        Snapshot { devices }
+    }
+
     fn tick_zones(&mut self) -> Result<Snapshot, EngineError> {
-        let image = self.capture.capture()?;
+        let image = self.capture()?;
         let alpha = 1.0 - self.settings.smoothing;
-        let mut shown = Vec::new();
+        let mut devices = Vec::new();
         for link in &mut self.links {
             let colors: Vec<Rgb> = link
                 .zones
@@ -472,18 +501,21 @@ impl Engine {
             {
                 *color = Hsv::new(0.0, 0.0, 1.0);
             }
-            shown.extend_from_slice(&lamp);
+            devices.push(DeviceColors {
+                id: link.id.clone(),
+                colors: lamp.clone(),
+            });
             let frame = match link.product {
                 Product::Panels => Frame::Zones(lamp),
                 Product::Light => Frame::Color(lamp.first().copied().unwrap_or_default()),
             };
             link.frames.send_replace(Some(frame));
         }
-        Ok(Snapshot { zones: shown })
+        Ok(Snapshot { devices })
     }
 
     fn tick_color(&mut self) -> Result<Snapshot, EngineError> {
-        let image = self.capture.capture()?;
+        let image = self.capture()?;
         let color = dominant_color_with(
             &image.top_band(self.settings.capture_height).pixels,
             self.settings.vivid_priority,
@@ -500,10 +532,15 @@ impl Engine {
         )];
         shape(&mut lamp, &mut self.lit_top, &self.settings);
         let [lamp] = lamp;
+        let mut devices = Vec::new();
         for link in &self.links {
             link.frames.send_replace(Some(Frame::Color(lamp)));
+            devices.push(DeviceColors {
+                id: link.id.clone(),
+                colors: vec![lamp; link.zones.len().max(1)],
+            });
         }
-        Ok(Snapshot { zones: vec![lamp] })
+        Ok(Snapshot { devices })
     }
 
     /// Colors from the sound: reading the block paces the loop.
@@ -530,25 +567,25 @@ impl Engine {
             AudioHue::Fixed => self.settings.audio_fixed_hue as f32 / 360.0,
         };
         let zones = self.bass.process(&samples, hue, self.settings.audio_zones);
+        let mut devices = Vec::new();
         for link in &self.links {
+            // The 3 music zones spread over the device's zones, left to right.
+            let count = link.zones.len().max(1);
+            let colors: Vec<Hsv> = (0..count)
+                .map(|zone| zones[zone * zones.len() / count])
+                .collect();
             let frame = match link.product {
-                // The 3 music zones spread over the panels, left to right,
-                // through the instant DP 51 scene: what the bass needs.
-                Product::Panels => {
-                    let count = link.zones.len().max(1);
-                    Frame::Zones(
-                        (0..count)
-                            .map(|panel| zones[panel * zones.len() / count])
-                            .collect(),
-                    )
-                }
+                // Through the instant DP 51 scene: what the bass needs.
+                Product::Panels => Frame::Zones(colors.clone()),
                 Product::Light => Frame::Color(zones[0]),
             };
             link.frames.send_replace(Some(frame));
+            devices.push(DeviceColors {
+                id: link.id.clone(),
+                colors,
+            });
         }
-        Ok(Snapshot {
-            zones: zones.to_vec(),
-        })
+        Ok(Snapshot { devices })
     }
 
     /// Stops the device tasks, sets the devices back to white if asked, and

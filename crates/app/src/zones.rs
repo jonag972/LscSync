@@ -277,7 +277,7 @@ impl Root {
                     )
             })
             .collect();
-        let synced = device.synced;
+        let synced = device.modes.contains(&self.profile.settings.mode);
         let counts = Product::of(device).zone_counts();
         let (toggle_id, reset_id) = (id.to_owned(), id.to_owned());
         let hint = if self.engine.is_some() {
@@ -557,7 +557,11 @@ impl Root {
     /// Every synced device's zones on the screen, numbered per device.
     pub(crate) fn render_overview(&self) -> Div {
         let mut boxes = Vec::new();
-        for (number, device) in self.profile.sync_targets().enumerate() {
+        for (number, device) in self
+            .profile
+            .sync_targets(self.profile.settings.mode)
+            .enumerate()
+        {
             for (index, zone) in self.zones_of(&device.id).into_iter().enumerate() {
                 let label = if device.layout(0.0).len() > 1 {
                     format!("{}.{}", number + 1, index + 1)

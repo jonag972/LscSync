@@ -18,4 +18,4 @@ pub use layout::{Capabilities, ColorCommand, DataPoint, Product, Zone};
 pub use preferences::{Language, Preferences};
 pub use profile::{Device, Profile, ProfileError};
 pub use settings::{AudioHue, DarkScenes, Mode, Settings};
-pub use snapshot::Snapshot;
+pub use snapshot::{DeviceColors, Snapshot};

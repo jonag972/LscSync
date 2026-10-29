@@ -49,7 +49,7 @@ impl Root {
                     .profile
                     .devices
                     .iter()
-                    .any(|d| d.id == *sync_device && d.synced)
+                    .any(|d| d.id == *sync_device && !d.modes.is_empty())
                 {
                     self.toggle_synced(sync_device, cx);
                 }
@@ -63,10 +63,16 @@ impl Root {
         cx.notify();
     }
 
-    /// Adds a device to the sync or removes it, restarting a running sync.
+    /// Uses a device in the current mode or stops using it, restarting a
+    /// running sync.
     pub(crate) fn toggle_synced(&mut self, id: &str, cx: &mut Context<Self>) {
-        let synced = self.profile.devices.iter().any(|d| d.id == id && d.synced);
-        self.profile.set_synced(id, !synced);
+        let mode = self.profile.settings.mode;
+        let synced = self
+            .profile
+            .devices
+            .iter()
+            .any(|d| d.id == id && d.modes.contains(&mode));
+        self.profile.set_synced(id, mode, !synced);
         self.save();
         if self.engine.is_some() {
             self.stop(cx);
@@ -203,7 +209,7 @@ impl Root {
             list = list.child(device_row(
                 ("device", index),
                 device,
-                device.synced,
+                device.modes.contains(&self.profile.settings.mode),
                 cx.listener(move |this, _, _, cx| this.open_device(id.clone(), cx)),
             ));
         }

@@ -352,7 +352,7 @@ impl Root {
         let height = self.profile.settings.capture_height;
         let targets: Vec<Target> = self
             .profile
-            .sync_targets()
+            .sync_targets(self.profile.settings.mode)
             .map(|device| Target::new(device, height))
             .collect();
         if targets.is_empty() {
@@ -493,13 +493,14 @@ impl Root {
             .overflow_hidden();
 
         match (phase, &self.snapshot) {
-            (Phase::Running, Some(snapshot)) if !snapshot.zones.is_empty() => {
-                let colors: Vec<Hsv> = snapshot.zones.clone();
+            (Phase::Running, Some(snapshot)) if snapshot.all().next().is_some() => {
+                let colors: Vec<Hsv> = snapshot.all().copied().collect();
                 let tag = match self.profile.settings.mode {
                     Mode::ScreenZones => t!("hero.zones_screen"),
                     Mode::Screen => t!("hero.color_screen"),
                     Mode::Audio if *MUSIC_VIA_MICROPHONE => t!("hero.bass_microphone"),
                     Mode::Audio => t!("hero.bass_zones"),
+                    Mode::Fixed => t!("mode.fixed"),
                 };
                 hero.child(
                     color_bands(colors.into_iter().map(display_color), px(16.0))
@@ -773,6 +774,7 @@ fn mode_pill(
         Mode::ScreenZones => "ambilight",
         Mode::Screen => "color",
         Mode::Audio => "music",
+        Mode::Fixed => "fixed",
     };
     let pill = div()
         .id(id)
@@ -849,6 +851,7 @@ fn mode_label(mode: Mode) -> String {
         Mode::ScreenZones => t!("mode.ambilight"),
         Mode::Screen => t!("mode.color"),
         Mode::Audio => t!("mode.music"),
+        Mode::Fixed => t!("mode.fixed"),
     }
     .to_string()
 }

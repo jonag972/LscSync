@@ -229,6 +229,7 @@ impl Root {
                     &[Knob::HueSpeed]
                 },
             ),
+            Mode::Fixed => (&[Knob::Brightness], &[]),
         };
         let open = self.advanced_open;
 

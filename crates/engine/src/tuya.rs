@@ -8,7 +8,7 @@ use std::time::Duration;
 
 use lscsync_core::protocol;
 use lscsync_core::{ColorCommand, Hsv};
-use rustuya::tokio::{Device, Discovery, Listener, Version};
+use rustuya::tokio::{ConnectionState, Device, Discovery, Listener, Version};
 use thiserror::Error;
 
 const MODE_UNKNOWN: u8 = 0;
@@ -123,6 +123,11 @@ impl Lsc {
             Err(rustuya::tokio::TuyaError::Timeout) => Err(LscError::Timeout),
             Err(error) => Err(LscError::Tuya(error)),
         }
+    }
+
+    /// Connection state changes, for the logs: rustuya reconnects on its own.
+    pub fn watch_connection(&self) -> tokio::sync::watch::Receiver<ConnectionState> {
+        self.device.watch_connection_state()
     }
 
     pub fn listener(&self) -> Listener {

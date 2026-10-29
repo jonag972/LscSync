@@ -69,6 +69,7 @@ impl Root {
             cx.open_url(&release.url);
             return;
         };
+        tracing::info!("updating to {} ({installation:?})", release.version);
         self.update = UpdateState::Installing(release.clone());
         cx.notify();
         cx.spawn(async move |this, cx| {
@@ -81,7 +82,10 @@ impl Root {
                 .await;
             let _ = this.update(cx, |root, cx| match installed {
                 // The new version takes over: quitting also stops the sync.
-                Ok(()) => cx.quit(),
+                Ok(()) => {
+                    tracing::info!("update installed, quitting");
+                    cx.quit()
+                }
                 Err(error) => {
                     tracing::error!("update: {error}");
                     if let Some(release) = root.update.available().cloned() {
@@ -239,6 +243,13 @@ impl Root {
                     .child(row(t!("settings.source").to_string()).child(
                         link("github", "GitHub").on_click(|_, _, cx| cx.open_url(REPOSITORY)),
                     ))
+                    .child(
+                        row(t!("settings.logs").to_string()).child(
+                            link("logs", t!("settings.open_logs").to_string()).on_click(
+                                |_, _, cx| cx.open_with_system(&lscsync_platform::log_dir()),
+                            ),
+                        ),
+                    )
                     .child(
                         row(t!("settings.license").to_string()).child(
                             div()

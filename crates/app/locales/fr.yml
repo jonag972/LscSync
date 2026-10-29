@@ -160,6 +160,8 @@ settings:
   source: "Code source et aide"
   license: "Projet indépendant, licence MIT"
   ambient: "Fond lumineux pendant la synchro"
+  logs: "Ce qui s'est passé (journaux)"
+  open_logs: "Ouvrir"
 
 update:
   available: "LscSync %{version} est disponible"

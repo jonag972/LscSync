@@ -507,6 +507,10 @@ impl Root {
         };
         let id = calibration.device.clone();
         let tried = calibration.candidates.remove(0);
+        tracing::info!(
+            "calibration of {id}: {tried:?} {}",
+            if sharp { "sharp" } else { "fades" }
+        );
         let chosen = if sharp {
             Some((tried, t!("calibrate.sharp").to_string()))
         } else if calibration.candidates.is_empty() {

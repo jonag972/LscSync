@@ -73,6 +73,10 @@ impl Root {
             .iter()
             .any(|d| d.id == id && d.modes.contains(&mode));
         self.profile.set_synced(id, mode, !synced);
+        tracing::info!(
+            "{id}: {} in {mode:?} mode",
+            if synced { "removed" } else { "used" }
+        );
         self.save();
         if self.engine.is_some() {
             self.stop(cx);

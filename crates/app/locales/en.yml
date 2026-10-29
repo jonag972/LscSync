@@ -162,6 +162,8 @@ settings:
   source: "Source code and help"
   license: "Independent project, MIT license"
   ambient: "Glowing background while syncing"
+  logs: "What happened (logs)"
+  open_logs: "Open"
 
 update:
   available: "LscSync %{version} is available"

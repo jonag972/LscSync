@@ -29,6 +29,11 @@ const HUE_THRESHOLD: f32 = 0.02;
 const SATURATION_THRESHOLD: f32 = 0.1;
 const BRIGHTNESS_THRESHOLD: f32 = 0.04;
 
+/// How often the sync writes how it is doing to the logs.
+const STATS_PERIOD: Duration = Duration::from_secs(60);
+/// A frame slower than this is logged: the capture or the sound stalled.
+const SLOW_FRAME: Duration = Duration::from_millis(500);
+
 /// Pause after a device stopped answering, before trying again.
 const DEVICE_BACKOFF: Duration = Duration::from_secs(3);
 /// Below this share of the brightness setting, a zone counts as dark.
@@ -280,6 +285,22 @@ impl Engine {
             .worker_threads(2)
             .enable_all()
             .build()?;
+        tracing::info!(
+            "sync starting: {:?} mode, {} device(s): {}",
+            settings.mode,
+            targets.len(),
+            targets
+                .iter()
+                .map(|t| format!(
+                    "{} ({:?}, {} zone(s), {:?})",
+                    t.name,
+                    t.product,
+                    t.zones.len(),
+                    t.color
+                ))
+                .collect::<Vec<_>>()
+                .join(", ")
+        );
 
         let connections: Vec<_> = targets
             .iter()
@@ -296,7 +317,10 @@ impl Engine {
                 .map_err(|error| LscError::Io(error.to_string()))
                 .and_then(|result| result);
             match connected {
-                Ok(lsc) => links.push(Self::link(&runtime, target, lsc, events.clone())),
+                Ok(lsc) => {
+                    tracing::info!("{}: connected", target.name);
+                    links.push(Self::link(&runtime, target, lsc, events.clone()))
+                }
                 Err(error) => {
                     tracing::warn!("{}: {error}", target.name);
                     if let Some(events) = &events {
@@ -359,6 +383,15 @@ impl Engine {
         events: Option<Sender<EngineEvent>>,
     ) -> Link {
         let (frames, receiver) = watch::channel(None);
+        // Logs the connection going down and coming back.
+        let mut connection = lsc.watch_connection();
+        let name = target.name.clone();
+        runtime.spawn(async move {
+            while connection.changed().await.is_ok() {
+                let state = *connection.borrow_and_update();
+                tracing::info!("{name}: connection {state:?}");
+            }
+        });
         let task = runtime.spawn(drive(
             lsc,
             target.product,
@@ -385,13 +418,17 @@ impl Engine {
         events: &Sender<EngineEvent>,
         updates: &Receiver<Update>,
     ) -> Result<(), EngineError> {
+        let mut stats = Stats::new();
         while !stop.load(Ordering::Relaxed) {
             let frame_start = Instant::now();
             for update in updates.try_iter() {
                 self.apply(update);
             }
-            let snapshot = self.tick()?;
+            let snapshot = self.tick().inspect_err(|error| {
+                tracing::error!("sync stopped: {error}");
+            })?;
             let _ = events.send(EngineEvent::Snapshot(snapshot));
+            stats.frame(frame_start.elapsed());
 
             // Screen modes: fixed period. Music mode: reading the audio block
             // already paces the loop (~50 Hz), no extra sleep.
@@ -604,6 +641,7 @@ impl Engine {
     /// Stops the device tasks, sets the devices back to white if asked, and
     /// closes the connections.
     pub fn close(self) {
+        tracing::info!("sync stopping");
         let Self {
             runtime,
             settings,
@@ -629,6 +667,46 @@ impl Engine {
                 lsc.close().await;
             }
         });
+    }
+}
+
+/// What the loop logs: frames per minute and the slowest one, and every
+/// frame slow enough to be seen as a cut.
+struct Stats {
+    since: Instant,
+    frames: u32,
+    slowest: Duration,
+}
+
+impl Stats {
+    fn new() -> Self {
+        Self {
+            since: Instant::now(),
+            frames: 0,
+            slowest: Duration::ZERO,
+        }
+    }
+
+    fn frame(&mut self, took: Duration) {
+        if took > SLOW_FRAME {
+            tracing::warn!(
+                "a frame took {} ms: capture or sound stalled",
+                took.as_millis()
+            );
+        }
+        self.frames += 1;
+        self.slowest = self.slowest.max(took);
+        let elapsed = self.since.elapsed();
+        if elapsed >= STATS_PERIOD {
+            tracing::info!(
+                "{} frames in {:.0} s ({:.1}/s), slowest {} ms",
+                self.frames,
+                elapsed.as_secs_f32(),
+                self.frames as f32 / elapsed.as_secs_f32(),
+                self.slowest.as_millis()
+            );
+            *self = Self::new();
+        }
     }
 }
 
@@ -768,6 +846,7 @@ async fn drive(
         match result {
             Ok(()) if failing => {
                 failing = false;
+                tracing::info!("{name}: answering again");
                 report(EngineEvent::DeviceBack(name.clone()));
             }
             Ok(()) => {}

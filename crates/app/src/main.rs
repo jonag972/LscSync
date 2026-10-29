@@ -413,6 +413,10 @@ impl Root {
     }
 
     fn primary_action(&mut self, cx: &mut Context<Self>) {
+        tracing::info!(
+            "sync button pressed ({:?} mode)",
+            self.profile.settings.mode
+        );
         match self.phase() {
             Phase::Idle | Phase::Failed => self.start(cx),
             Phase::Connecting | Phase::Running => self.stop(cx),
@@ -462,6 +466,7 @@ impl Root {
         if self.profile.settings.mode == mode {
             return;
         }
+        tracing::info!("mode: {mode:?}");
         self.profile.settings.mode = mode;
         self.save();
         // The mode changes the source (screen or sound): restart the engine.
@@ -881,9 +886,14 @@ fn init_logging() {
     static LOG_GUARD: std::sync::OnceLock<tracing_appender::non_blocking::WorkerGuard> =
         std::sync::OnceLock::new();
 
-    // The binary's crate name is `lscsync` (bin name), not the package's.
-    let filter = tracing_subscriber::EnvFilter::try_from_default_env()
-        .unwrap_or_else(|_| "lscsync=info,lscsync_engine=info".into());
+    // Everything from the app's crates and the Tuya library; warnings only
+    // from the others (the graphics stack is chatty). The binary's crate
+    // name is `lscsync` (bin name), not the package's.
+    let filter = tracing_subscriber::EnvFilter::try_from_default_env().unwrap_or_else(|_| {
+        "warn,lscsync=info,lscsync_engine=info,lscsync_cloud=info,lscsync_core=info,\
+         lscsync_platform=info,rustuya=info,rustuya_core=info"
+            .into()
+    });
 
     let log_dir = log_dir();
     let file_writer = std::fs::create_dir_all(&log_dir)
@@ -905,14 +915,17 @@ fn init_logging() {
     if let Some(file) = file_writer {
         tracing_subscriber::fmt()
             .with_env_filter(filter)
+            .with_ansi(false)
             .with_writer(move || Tee {
                 stderr: std::io::stderr(),
                 file: file.clone(),
             })
             .init();
         tracing::info!(
-            "LscSync {} starting, logs in {}",
+            "LscSync {} starting on {} {}, logs in {}",
             env!("CARGO_PKG_VERSION"),
+            std::env::consts::OS,
+            std::env::consts::ARCH,
             log_dir.display()
         );
     } else {

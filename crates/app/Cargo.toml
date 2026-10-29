@@ -20,6 +20,7 @@ gpui-kit = { workspace = true }
 gpui-tray = { workspace = true }
 tracing = { workspace = true }
 tracing-subscriber = { workspace = true }
+tracing-appender = { workspace = true }
 serde = { workspace = true }
 rust-i18n = "4"
 sys-locale = "0.3"

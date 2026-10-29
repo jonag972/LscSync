@@ -15,7 +15,7 @@ use gpui_kit::*;
 use gpui_tray::{Icon, Tray};
 use lscsync_core::{Hsv, Mode, Preferences, Profile, Snapshot};
 use lscsync_engine::worker::{EngineEvent, EngineHandle, ErrorKind, Target};
-use lscsync_platform::{legacy_settings_path, preferences_path, profile_path};
+use lscsync_platform::{legacy_settings_path, log_dir, preferences_path, profile_path};
 use rust_i18n::t;
 
 mod devices;
@@ -854,13 +854,75 @@ fn apply_theme(cx: &mut App) {
     });
 }
 
+/// Writes every log line to stderr and to the log file.
+struct Tee {
+    stderr: std::io::Stderr,
+    file: tracing_appender::non_blocking::NonBlocking,
+}
+
+impl std::io::Write for Tee {
+    fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
+        // stderr may be gone (launched from the Finder): never fail on it.
+        let _ = self.stderr.write_all(buf);
+        self.file.write_all(buf)?;
+        Ok(buf.len())
+    }
+
+    fn flush(&mut self) -> std::io::Result<()> {
+        let _ = self.stderr.flush();
+        self.file.flush()
+    }
+}
+
+/// Logs to stderr (visible from a terminal) and to daily files in the OS log
+/// folder (`~/Library/Logs/LscSync` on macOS, 14 days kept). Launched from the
+/// Finder, stderr goes nowhere and the logs were lost.
+fn init_logging() {
+    static LOG_GUARD: std::sync::OnceLock<tracing_appender::non_blocking::WorkerGuard> =
+        std::sync::OnceLock::new();
+
+    // The binary's crate name is `lscsync` (bin name), not the package's.
+    let filter = tracing_subscriber::EnvFilter::try_from_default_env()
+        .unwrap_or_else(|_| "lscsync=info,lscsync_engine=info".into());
+
+    let log_dir = log_dir();
+    let file_writer = std::fs::create_dir_all(&log_dir)
+        .ok()
+        .and_then(|()| {
+            tracing_appender::rolling::Builder::new()
+                .filename_prefix("lscsync")
+                .filename_suffix("log")
+                .rotation(tracing_appender::rolling::Rotation::DAILY)
+                .max_log_files(14)
+                .build(&log_dir)
+                .ok()
+        })
+        .map(|appender| {
+            let (writer, guard) = tracing_appender::non_blocking(appender);
+            let _ = LOG_GUARD.set(guard);
+            writer
+        });
+    if let Some(file) = file_writer {
+        tracing_subscriber::fmt()
+            .with_env_filter(filter)
+            .with_writer(move || Tee {
+                stderr: std::io::stderr(),
+                file: file.clone(),
+            })
+            .init();
+        tracing::info!(
+            "LscSync {} starting, logs in {}",
+            env!("CARGO_PKG_VERSION"),
+            log_dir.display()
+        );
+    } else {
+        eprintln!("log folder {log_dir:?} not usable, logging to stderr only");
+        tracing_subscriber::fmt().with_env_filter(filter).init();
+    }
+}
+
 fn main() {
-    tracing_subscriber::fmt()
-        .with_env_filter(
-            tracing_subscriber::EnvFilter::try_from_default_env()
-                .unwrap_or_else(|_| "lscsync_app=info,lscsync_engine=info".into()),
-        )
-        .init();
+    init_logging();
 
     gpui_kit::application()
         .with_quit_mode(QuitMode::Explicit)

@@ -38,7 +38,8 @@ system:
 - **Windows** (`-setup.exe`): run the installer. The app isn't signed yet, so Windows may show
   a SmartScreen warning: click *More info*, then *Run anyway*. A portable `.zip` is also
   available.
-- **Linux** (`.AppImage`): make it executable (`chmod +x`) and run it.
+- **Linux**: on Ubuntu, Debian or Mint, open the `.deb` to install it from the software center.
+  On other distributions, take the `.AppImage`: make it executable (`chmod +x`) and run it.
 
 | | macOS 13 or later | macOS 12.3 – 12.7 | Windows 10 and 11 | Linux (x86_64)\* |
 |---|---|---|---|---|
@@ -99,7 +100,8 @@ cargo test --workspace               # tests
 cargo run -p lscsync-cli -- help     # diagnostics: status, test pattern, back to white, audio
 ./tools/bundle-macos.sh --dmg        # universal "LscSync.app" and .dmg (macOS)
 ./tools/appimage.sh                  # AppImage (Linux; ./tools/linux-deps.sh installs the libraries)
-./tools/generate-icons.sh            # icons from assets/icon/lscsync.svg
+./tools/deb.sh                       # .deb package (Linux; installs cargo-deb if needed)
+./tools/generate-icons.sh            # icons and installer art from assets/icon and assets/installer
 ```
 
 The Windows installer is described in `installer/windows.iss` (Inno Setup). The release

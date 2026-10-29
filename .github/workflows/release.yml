@@ -14,6 +14,8 @@ on:
       - .github/workflows/release.yml
       - tools/**
       - installer/**
+      - assets/installer/**
+      - assets/linux/**
   workflow_dispatch:
 
 permissions:
@@ -161,9 +163,9 @@ jobs:
           if-no-files-found: error
 
   linux:
-    name: Build Linux app (AppImage)
+    name: Build Linux app (AppImage and .deb)
     needs: version
-    # Oldest supported base (see ci.yml): the AppImage runs on newer distributions.
+    # Oldest supported base (see ci.yml): both packages run on newer distributions.
     runs-on: ubuntu-24.04
     timeout-minutes: 60
     steps:
@@ -183,10 +185,15 @@ jobs:
           cache-on-failure: true
 
       - name: Build the AppImage
+        run: ./tools/appimage.sh
+
+      - name: Build the .deb package
+        run: ./tools/deb.sh --skip-build
+
+      - name: Collect the AppImage and the .deb
         run: |
-          ./tools/appimage.sh
           mkdir -p dist
-          cp target/release/bundle/LscSync-*-x86_64.AppImage dist/
+          cp target/release/bundle/LscSync-*-x86_64.AppImage target/release/bundle/LscSync-*-amd64.deb dist/
 
       - uses: actions/upload-artifact@v4
         with:

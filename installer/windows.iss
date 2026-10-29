@@ -34,6 +34,10 @@ OutputBaseFilename={#Name}-{#Version}-windows-setup
 Compression=lzma2
 SolidCompression=yes
 WizardStyle=modern
+; Side panel and header art (tools/generate-icons.sh): Setup picks the size
+; closest to the display scale.
+WizardImageFile=..\assets\installer\wizard-image-202x386.png,..\assets\installer\wizard-image-336x643.png,..\assets\installer\wizard-image-534x1022.png
+WizardSmallImageFile=..\assets\installer\wizard-small-58.png,..\assets\installer\wizard-small-97.png,..\assets\installer\wizard-small-159.png
 ; Windows 10 or later.
 MinVersion=10.0
 ArchitecturesAllowed=x64compatible

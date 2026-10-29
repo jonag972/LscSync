@@ -1,0 +1,20 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="660" height="400" viewBox="0 0 660 400">
+  <!-- macOS disk image window (installer/dmg-settings.py places the icons).
+       Light on purpose: Finder always draws icon names in black over a
+       background image. The 3 Ambilight zones sit at the top, the only edge
+       the title bar never hides. -->
+  <defs>
+    <linearGradient id="bg" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#FAFAF9"/>
+      <stop offset="1" stop-color="#EFEEEC"/>
+    </linearGradient>
+  </defs>
+  <rect width="660" height="400" fill="url(#bg)"/>
+  <rect x="0" y="0" width="220" height="4" fill="#D9662B"/>
+  <rect x="220" y="0" width="220" height="4" fill="#7A4FD0"/>
+  <rect x="440" y="0" width="220" height="4" fill="#1FA38A"/>
+  <!-- Drag path from the app to Applications -->
+  <circle cx="294" cy="170" r="4.5" fill="#D9662B"/>
+  <circle cx="330" cy="170" r="5.5" fill="#7A4FD0"/>
+  <circle cx="366" cy="170" r="6.5" fill="#1FA38A"/>
+</svg>

@@ -1,5 +1,6 @@
 #!/bin/sh
-# Regenerates every icon variant from assets/icon/lscsync.svg.
+# Regenerates every icon variant from assets/icon/lscsync.svg, and the
+# installer art from assets/installer/*.svg.
 # Run on macOS (AppKit renders the SVG, iconutil builds the .icns).
 set -eu
 cd "$(dirname "$0")/.."
@@ -58,3 +59,21 @@ $RENDER "$OUT/social-preview.svg" "$OUT/social-preview.png" 1280x640
 rm "$OUT/social-preview.svg"
 
 echo "icons generated in $OUT"
+
+# Installer art. macOS disk image background: one .tiff holding the 1x and
+# Retina renders.
+ART=assets/installer
+$RENDER "$ART/dmg-background.svg" "$TMP/dmg.png" 660x400
+$RENDER "$ART/dmg-background.svg" "$TMP/dmg@2x.png" 1320x800
+tiffutil -cathidpicheck "$TMP/dmg.png" "$TMP/dmg@2x.png" -out "$ART/dmg-background.tiff"
+
+# Windows installer: Inno Setup picks the size closest to the display scale
+# (100%, 150% and 250%).
+for size in 202x386 336x643 534x1022; do
+    $RENDER "$ART/wizard-image.svg" "$ART/wizard-image-$size.png" "$size"
+done
+for size in 58 97 159; do
+    $RENDER "$SVG" "$ART/wizard-small-$size.png" "$size" 10 10 80 80
+done
+
+echo "installer art generated in $ART"

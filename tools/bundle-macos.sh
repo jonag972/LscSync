@@ -66,12 +66,19 @@ echo "bundle: $APP"
 
 if [ "$DMG" = true ]; then
     # Disk image with a shortcut to Applications: install by drag and drop.
-    STAGE=$(mktemp -d)
-    trap 'rm -rf "$STAGE"' EXIT
-    cp -R "$APP" "$STAGE/"
-    ln -s /Applications "$STAGE/Applications"
+    # dmgbuild writes the window layout itself, without driving Finder, so it
+    # also works on CI runners. Installed once in its own environment.
+    DMGBUILD=target/dmgbuild/bin/dmgbuild
+    if [ ! -x "$DMGBUILD" ]; then
+        python3 -m venv target/dmgbuild
+        target/dmgbuild/bin/pip install --quiet --disable-pip-version-check dmgbuild==1.6.7
+    fi
     DMG="$BUNDLE/LscSync-$VERSION-macos.dmg"
     rm -f "$DMG"
-    hdiutil create -quiet -volname "LscSync" -srcfolder "$STAGE" -format UDZO "$DMG"
+    "$DMGBUILD" -s installer/dmg-settings.py \
+        -D app="$APP" \
+        -D icon=assets/icon/lscsync.icns \
+        -D background=assets/installer/dmg-background.tiff \
+        "LscSync" "$DMG"
     echo "disk image: $DMG"
 fi

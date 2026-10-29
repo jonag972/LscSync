@@ -3,6 +3,8 @@ name = "lscsync-app"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
+repository.workspace = true
+description = "LSC Smart Connect panels that follow your screen and your music"
 
 [[bin]]
 name = "lscsync"
@@ -27,3 +29,20 @@ objc2-foundation = "0.3"
 # Windows .exe icon; build.rs only uses it for that target.
 [build-dependencies]
 embed-resource = "3"
+
+# Debian/Ubuntu package (tools/deb.sh). Paths are relative to this crate.
+[package.metadata.deb]
+name = "lscsync"
+maintainer = "Jonathan Gromat <128492963+jonag972@users.noreply.github.com>"
+copyright = "2026 Jonathan Gromat"
+section = "utils"
+extended-description = """\
+Syncs LSC Smart Connect (Tuya) light panels with the screen (Ambilight, \
+3 zones), a single dominant color, or the music, entirely over the local \
+network."""
+depends = "$auto"
+assets = [
+    ["target/release/lscsync", "usr/bin/", "755"],
+    ["../../assets/linux/lscsync.desktop", "usr/share/applications/", "644"],
+    ["../../assets/icon/lscsync-256.png", "usr/share/icons/hicolor/256x256/apps/lscsync.png", "644"],
+]

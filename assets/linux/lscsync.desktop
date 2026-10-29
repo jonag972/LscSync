@@ -1,0 +1,7 @@
+[Desktop Entry]
+Type=Application
+Name=LscSync
+Comment=LSC Smart Connect panels that follow your screen and your music
+Exec=lscsync
+Icon=lscsync
+Categories=Utility;

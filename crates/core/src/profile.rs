@@ -8,6 +8,7 @@ use std::path::Path;
 
 use serde::{Deserialize, Serialize};
 
+use crate::layout::Zone;
 use crate::settings::Settings;
 
 /// Format version written by this version of the app.
@@ -25,6 +26,13 @@ pub struct Device {
     pub product: String,
     #[serde(default)]
     pub category: String,
+    /// Follows the screen or the music when the sync runs.
+    #[serde(default)]
+    pub synced: bool,
+    /// Where each zone looks on the screen; empty for the product's default
+    /// layout (see [`Device::layout`]).
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub zones: Vec<Zone>,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -32,7 +40,8 @@ pub struct Profile {
     pub version: u32,
     #[serde(default)]
     pub devices: Vec<Device>,
-    /// ID of the device driven by the sync.
+    /// First device of the sync. Each device now says whether it is synced
+    /// ([`Device::synced`]); kept for profiles written before that.
     #[serde(default)]
     pub sync_device: Option<String>,
     #[serde(default)]
@@ -105,15 +114,24 @@ impl Profile {
                 ip: legacy.ip,
                 product: String::new(),
                 category: String::new(),
+                synced: true,
+                zones: Vec::new(),
             });
         }
         Ok(profile)
     }
 
     fn parse(text: &str) -> Result<Self, ProfileError> {
-        let profile: Self = serde_json::from_str(text)?;
+        let mut profile: Self = serde_json::from_str(text)?;
         if profile.version > PROFILE_VERSION {
             return Err(ProfileError::TooNew);
+        }
+        // Before multi-device sync, a single device followed the screen.
+        if !profile.devices.iter().any(|device| device.synced)
+            && let Some(id) = profile.sync_device.clone()
+            && let Some(device) = profile.devices.iter_mut().find(|d| d.id == id)
+        {
+            device.synced = true;
         }
         Ok(profile)
     }
@@ -138,16 +156,30 @@ impl Profile {
             return Err(ProfileError::Empty);
         }
         profile.version = PROFILE_VERSION;
-        if profile.sync_target().is_none() {
-            profile.sync_device = profile.devices.first().map(|d| d.id.clone());
+        if profile.sync_target().is_none()
+            && let Some(first) = profile.devices.first().map(|d| d.id.clone())
+        {
+            profile.set_synced(&first, true);
         }
         Ok(profile)
     }
 
-    /// Device driven by the sync, if configured.
+    /// First device of the sync, if any: named in the footer and in errors.
     pub fn sync_target(&self) -> Option<&Device> {
-        let id = self.sync_device.as_deref()?;
-        self.devices.iter().find(|device| device.id == id)
+        self.sync_targets().next()
+    }
+
+    /// Devices that follow the screen or the music.
+    pub fn sync_targets(&self) -> impl Iterator<Item = &Device> {
+        self.devices.iter().filter(|device| device.synced)
+    }
+
+    /// Adds or removes a device from the sync.
+    pub fn set_synced(&mut self, id: &str, synced: bool) {
+        if let Some(device) = self.devices.iter_mut().find(|d| d.id == id) {
+            device.synced = synced;
+        }
+        self.sync_device = self.sync_target().map(|device| device.id.clone());
     }
 
     /// Merges the devices returned by the account: keys and names updated,
@@ -159,13 +191,17 @@ impl Profile {
                     if device.ip.is_empty() {
                         device.ip = std::mem::take(&mut known.ip);
                     }
+                    device.synced = known.synced;
+                    device.zones = std::mem::take(&mut known.zones);
                     *known = device;
                 }
                 None => self.devices.push(device),
             }
         }
-        if self.sync_target().is_none() {
-            self.sync_device = self.devices.first().map(|d| d.id.clone());
+        if self.sync_target().is_none()
+            && let Some(first) = self.devices.first().map(|d| d.id.clone())
+        {
+            self.set_synced(&first, true);
         }
     }
 
@@ -190,6 +226,8 @@ mod tests {
             ip: ip.to_owned(),
             product: String::new(),
             category: "dd".to_owned(),
+            synced: false,
+            zones: Vec::new(),
         }
     }
 
@@ -254,7 +292,8 @@ mod tests {
     fn export_then_import() {
         let mut profile = Profile::default();
         profile.merge_devices(vec![device("a", "10.0.0.2"), device("b", "")]);
-        profile.sync_device = Some("b".to_owned());
+        profile.set_synced("a", false);
+        profile.set_synced("b", true);
         profile.settings.mode = Mode::Screen;
 
         let imported = Profile::from_import(&profile.to_export()).unwrap();
@@ -299,5 +338,17 @@ mod tests {
         );
         assert_eq!(a.local_key, "new-key-00000000");
         assert_eq!(profile.sync_target().unwrap().id, "a");
+    }
+
+    #[test]
+    fn single_device_profiles_become_synced_devices() {
+        let profile = Profile {
+            devices: vec![device("a", ""), device("b", "")],
+            sync_device: Some("b".to_owned()),
+            ..Profile::default()
+        };
+        let loaded = Profile::parse(&profile.to_export()).unwrap();
+        let synced: Vec<&str> = loaded.sync_targets().map(|d| d.id.as_str()).collect();
+        assert_eq!(synced, ["b"]);
     }
 }

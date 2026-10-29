@@ -14,6 +14,8 @@ pub enum CaptureError {
     Xcap(#[from] XCapError),
     #[error("no screen found")]
     NoMonitor,
+    #[error("preview image: {0}")]
+    Preview(String),
 }
 
 pub struct ScreenCapture {
@@ -58,5 +60,21 @@ impl ScreenCapture {
         }
 
         Ok(Image::new(out_width, out_height, pixels))
+    }
+
+    /// The screen as a small PNG `width` pixels wide, for the zone editor,
+    /// with its height / width ratio.
+    pub fn preview_png(&self, width: u32) -> Result<(Vec<u8>, f32), CaptureError> {
+        use xcap::image::{ImageFormat, imageops};
+
+        let frame = self.monitor.capture_image()?;
+        let ratio = frame.height() as f32 / frame.width().max(1) as f32;
+        let height = ((width as f32 * ratio).round() as u32).max(1);
+        let small = imageops::thumbnail(&frame, width, height);
+        let mut png = std::io::Cursor::new(Vec::new());
+        small
+            .write_to(&mut png, ImageFormat::Png)
+            .map_err(|error| CaptureError::Preview(error.to_string()))?;
+        Ok((png.into_inner(), ratio))
     }
 }

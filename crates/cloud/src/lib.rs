@@ -65,6 +65,8 @@ impl From<CloudDevice> for lscsync_core::Device {
             ip: String::new(),
             product: device.product_name.trim().to_owned(),
             category: device.category,
+            synced: false,
+            zones: Vec::new(),
         }
     }
 }
@@ -188,6 +190,18 @@ impl Session {
             devices.extend(list);
         }
         Ok(devices)
+    }
+
+    /// What a device can do: its `functions` (writable) and `status` (readable)
+    /// codes, with their types and value ranges.
+    pub fn specification(&self, device_id: &str) -> Result<Value, CloudError> {
+        self.get(&format!("/v1.1/m/life/{device_id}/specifications"), None)
+    }
+
+    /// How the codes map to the data point (DP) ids used on the local network,
+    /// in `dpStatusRelationDTOS`.
+    pub fn data_points(&self, device_id: &str) -> Result<Value, CloudError> {
+        self.get(&format!("/v1.0/m/life/devices/{device_id}/status"), None)
     }
 
     /// Signed, encrypted GET on the "customer" API; returns the decrypted result.

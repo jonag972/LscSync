@@ -14,6 +14,7 @@ use thiserror::Error;
 const MODE_UNKNOWN: u8 = 0;
 const MODE_COLOR: u8 = 1;
 const MODE_SCENE: u8 = 2;
+const MODE_MUSIC: u8 = 3;
 
 #[derive(Debug, Clone)]
 pub struct LscConfig {
@@ -128,6 +129,26 @@ impl Lsc {
         Ok(())
     }
 
+    /// Single color, applied instantly (DP 27, music mode): DP 24 fades.
+    pub async fn send_direct(&self, color: Hsv) -> Result<(), LscError> {
+        self.ensure_power().await?;
+        self.ensure_mode(MODE_MUSIC, protocol::MODE_MUSIC).await?;
+        self.device
+            .set_value(protocol::DP_MUSIC, protocol::dp_music(color))
+            .await?;
+        Ok(())
+    }
+
+    /// One color per panel, applied instantly (DP 51, 12-segment scene).
+    pub async fn send_scene_panels(&self, colors: &[Hsv]) -> Result<(), LscError> {
+        self.ensure_power().await?;
+        self.ensure_mode(MODE_SCENE, protocol::MODE_SCENE).await?;
+        self.device
+            .set_value(protocol::DP_SCENE, protocol::dp_scene_panels(colors))
+            .await?;
+        Ok(())
+    }
+
     /// 3 colors left / middle / right (DP 51).
     pub async fn send_zones(&self, zones: &[Hsv; 3], invert: bool) -> Result<(), LscError> {
         self.ensure_power().await?;
@@ -136,15 +157,6 @@ impl Lsc {
             .set_value(protocol::DP_SCENE, protocol::dp_scene_zones(zones, invert))
             .await?;
         Ok(())
-    }
-
-    /// 1 color -> DP 24, 3 colors -> DP 51.
-    pub async fn send(&self, colors: &[Hsv], invert: bool) -> Result<(), LscError> {
-        match colors {
-            [color] => self.send_color(*color).await,
-            [a, b, c] => self.send_zones(&[*a, *b, *c], invert).await,
-            _ => Ok(()),
-        }
     }
 
     pub async fn restore_white(&self) -> Result<(), LscError> {

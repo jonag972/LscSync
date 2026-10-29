@@ -26,10 +26,12 @@ pub const DANGER_TEXT: u32 = 0xF2A3A3;
 /// On macOS the title bar is transparent: leave room for the traffic lights.
 pub const TITLEBAR_INSET: f32 = if cfg!(target_os = "macos") { 28.0 } else { 0.0 };
 
-/// Window width, and its height for the main page and for the setup flow.
+/// Window width, and its height for the main page, the setup flow and the
+/// device pages (they show the screen preview).
 pub const WINDOW_WIDTH: f32 = 400.0;
 pub const MAIN_HEIGHT: f32 = 560.0;
 pub const SETUP_HEIGHT: f32 = 450.0;
+pub const DEVICES_HEIGHT: f32 = 690.0;
 
 pub const FONT: &str = "Geist";
 pub const FONT_MONO: &str = "Geist Mono";
@@ -151,4 +153,45 @@ pub fn error_text(text: impl Into<SharedString>) -> Div {
         .text_size(px(12.0))
         .text_color(rgb(DANGER_TEXT))
         .child(text.into())
+}
+
+/// Small uppercase title above a group of settings.
+pub fn section_label(text: String) -> Div {
+    div()
+        .mt(px(4.0))
+        .text_size(px(11.0))
+        .text_color(rgb(TEXT_FAINT))
+        .child(text)
+}
+
+/// Label on the left, control on the right.
+pub fn row(label: String) -> Div {
+    div()
+        .flex()
+        .items_center()
+        .justify_between()
+        .gap(px(12.0))
+        .text_size(px(13.0))
+        .child(label)
+}
+
+/// On/off switch, amber when on.
+pub fn toggle(id: &'static str, on: bool) -> Stateful<Div> {
+    div()
+        .id(id)
+        .flex_none()
+        .w(px(30.0))
+        .h(px(18.0))
+        .p(px(2.0))
+        .rounded_full()
+        .cursor_pointer()
+        .flex()
+        .when(on, |toggle| toggle.justify_end())
+        .bg(rgb(if on { ACCENT } else { LINE_STRONG }))
+        .child(
+            div()
+                .size(px(14.0))
+                .rounded_full()
+                .bg(rgb(if on { ON_ACCENT } else { TEXT_MUTED })),
+        )
 }

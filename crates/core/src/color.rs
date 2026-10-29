@@ -117,6 +117,27 @@ impl Image {
         }
     }
 
+    /// Pixels inside a zone (at least one).
+    pub fn region(&self, zone: crate::layout::Zone) -> Vec<Rgb> {
+        if self.width == 0 || self.height == 0 {
+            return Vec::new();
+        }
+        let span = |start: f32, size: f32, total: usize| {
+            let first = ((start * total as f32).floor() as usize).min(total - 1);
+            let end = (((start + size) * total as f32).ceil() as usize).clamp(first + 1, total);
+            first..end
+        };
+        let columns = span(zone.x, zone.w, self.width);
+        span(zone.y, zone.h, self.height)
+            .flat_map(|y| {
+                let row = y * self.width;
+                self.pixels[row + columns.start..row + columns.end]
+                    .iter()
+                    .copied()
+            })
+            .collect()
+    }
+
     /// Vertical bands from left to right, like `numpy.array_split`.
     pub fn split_zones(&self, n: usize) -> Vec<Self> {
         assert!(n > 0, "at least one zone");

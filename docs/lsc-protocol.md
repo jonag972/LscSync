@@ -40,6 +40,7 @@ client ID registered with Tuya.
 | 21 | Mode | `white`, `colour`, `scene`, `music` |
 | 22 | White brightness | 10–1000 |
 | 24 | Single color | `HHHHSSSSVVVV` hexadecimal (0–360, 0–1000, 0–1000) |
+| 27 | Music data: instant single color | 21 hexadecimal digits, see below |
 | 51 | "Dreamlight" scene | base64, see below |
 | 61 | Color on a list of panels | base64, see below |
 
@@ -47,6 +48,24 @@ client ID registered with Tuya.
 
 The controller does a **hardware fade** to each new color, which looks sluggish in a continuous
 stream. Music mode therefore uses DP 51, which is applied instantly.
+
+### DP 27: `music_data`, instant single color
+
+Tuya's standard music function, listed in the device's cloud specification (without its DP id).
+Tested on the panels on 29/10/2026:
+
+```text
+change mode (1 hex digit, 0 = direct) | hue HHHH (0-360) | saturation SSSS | value VVVV
+| white brightness BBBB | temperature TTTT          e.g. 0 0000 03e8 03e8 0000 0000 = red
+```
+
+- Needs mode `music` on DP 21.
+- With mode `0` (direct), the color changes **instantly**: sharp cuts where DP 24 fades.
+- Saturation and value are on **0-1000**, although the cloud specification says 0-255 (255 gives
+  a dimmer color).
+- Streamed at 25 frames/s for 20 s without waiting for replies: no loss, no freeze.
+- Being a standard function, it is a candidate for fast single-color control of other Tuya
+  lights too.
 
 ### DP 51: scene, used for continuous streaming
 
@@ -58,13 +77,17 @@ stream. Music mode therefore uses DP 51, which is applied instantly.
 - Mode `00` = static. Other modes start built-in animations (e.g. `08` = "snake"), not
   direct control.
 - Option `0x80` = split into zones. Without it: the first color everywhere.
-- **6 colors + `0x80`**: the 6-panel Z-shaped kit shows **3 zones of 2 panels**.
-  Color 1 = right zone, color 2 = middle, color 3 = left; colors 4 to 6 are ignored but must be
-  present.
+- The controller drives **12 segments** (the LSC app shows 12, in a U): the kit's panels are
+  segments 1 to 6, and the controller can probably take up to 12 panels.
+- **12 colors + `0x80`: one color per panel, applied instantly** (29/10/2026): color *i* goes
+  to panel *i* (the same numbering as DP 61), colors 7 to 12 to segments without a panel. Held
+  25 frames/s for 2 minutes without a freeze. This is what Ambilight uses.
+- **6 colors + `0x80`**: each color covers 2 segments, so the kit shows **3 zones of 2
+  panels** and colors 4 to 6 land on segments without a panel. Music mode still uses this.
 - A single brightness for the whole scene.
 - Applied **instantly** (no fade).
-- 13 option and mode variants, 12 colors, and the `0x60` option used by official scenes never
-  gave anything finer than 3 pairs of panels.
+- Earlier trials (13 option and mode variants, the `0x60` option of official scenes) never gave
+  anything finer than 3 pairs; the 12-color scene above does.
 - Implementation: `crates/core/src/protocol.rs`.
 
 ### DP 61: per-panel control
@@ -77,11 +100,21 @@ Seen in frames sent by the official LSC app:
 ```
 
 - One color on any list of panels, one command per color.
-- **Reliable for one-off commands** (single command, waiting for the reply).
-- **Unusable for continuous streaming**: without waiting for replies, commands get lost; when
-  waiting for them (~4 to 10 frames/s), the controller freezes after a few seconds. The official
-  app never streams it either.
-- A lead for manual control (one color per panel, picked by hand).
+- **Each command must wait for the controller's reply**: sent without waiting, commands get
+  lost. A reply takes ~30 ms once the connection is warm (~120 ms during the first seconds).
+- **Streaming works within a budget** (29/10/2026, all 6 panels changing
+  on every frame):
+  - 2 frames/s (12 commands/s) for 60 s and 4 frames/s (24 commands/s) for 90 s: no command
+    lost, no freeze.
+  - As fast as the replies allow (~8 frames/s, 48 commands/s): the controller stops answering
+    after ~20 s, then comes back on its own about a minute later.
+  - The earlier Python implementation froze even at ~4 frames/s; the difference is the
+    connection handling of `rustuya`.
+- **Each panel fades to its new color (~2 s)**, whatever the header bytes tried; DP 61 is
+  ignored outside `colour` mode. Too slow for Ambilight: use the 12-color DP 51 scene.
+- The official app never streams it: it sends one command per color picked by hand.
+- The panels' local status lists DPs 20, 21, 22, 26 and 34 (unknown, `false`); DPs 51 and 61 are
+  write-only and missing from Tuya's cloud description of the device.
 
 ## Frame rate
 

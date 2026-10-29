@@ -5,6 +5,7 @@ edition.workspace = true
 license.workspace = true
 
 [dependencies]
+tracing = { workspace = true }
 lscsync-core = { workspace = true }
 rustuya = { workspace = true }
 thiserror = { workspace = true }

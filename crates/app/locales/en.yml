@@ -113,7 +113,7 @@ device:
 
 devices:
   title: "Devices"
-  hint: "Tap a device to choose the one that follows your screen."
+  hint: "Tap a device to place its zones on the screen."
   rescan: "Search the network"
   scanning: "Searching…"
   reconnect: "Reconnect my LSC account"
@@ -150,3 +150,14 @@ settings:
 update:
   available: "LscSync %{version} is available"
   download: "Download"
+
+sync:
+  unreachable: "Not answering: %{names}"
+
+zones:
+  heading: "ZONES ON THE SCREEN · %{count}"
+  hint_running: "Drag a zone to move it, pull its corner to resize it. The selected zone lights up in white."
+  hint_stopped: "Drag a zone to move it, pull its corner to resize it. Start syncing to see the selected zone light up in white."
+  panels: "Panels"
+  in_sync: "In the sync"
+  reset: "Reset the zones"

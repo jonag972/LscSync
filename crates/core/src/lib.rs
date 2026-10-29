@@ -5,6 +5,7 @@
 //! it can be tested anywhere, including Linux CI.
 
 pub mod color;
+pub mod layout;
 pub mod preferences;
 pub mod profile;
 pub mod protocol;
@@ -13,7 +14,8 @@ pub mod snapshot;
 pub mod version;
 
 pub use color::{Hsv, Image, Rgb};
+pub use layout::{Product, Zone};
 pub use preferences::{Language, Preferences};
 pub use profile::{Device, Profile, ProfileError};
 pub use settings::{AudioHue, Mode, Settings};
-pub use snapshot::{Snapshot, lsc_colors};
+pub use snapshot::Snapshot;

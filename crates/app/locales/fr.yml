@@ -111,7 +111,7 @@ device:
 
 devices:
   title: "Appareils"
-  hint: "Touche un appareil pour choisir celui qui suit ton écran."
+  hint: "Touche un appareil pour placer ses zones sur l'écran."
   rescan: "Rechercher sur le réseau"
   scanning: "Recherche en cours…"
   reconnect: "Reconnecter mon compte LSC"
@@ -148,3 +148,14 @@ settings:
 update:
   available: "LscSync %{version} est disponible"
   download: "Télécharger"
+
+sync:
+  unreachable: "Ne répond pas : %{names}"
+
+zones:
+  heading: "ZONES SUR L'ÉCRAN · %{count}"
+  hint_running: "Glisse une zone pour la déplacer, tire son coin pour la redimensionner. La zone choisie s'allume en blanc."
+  hint_stopped: "Glisse une zone pour la déplacer, tire son coin pour la redimensionner. Lance la synchro pour voir la zone choisie s'allumer en blanc."
+  panels: "Panneaux"
+  in_sync: "Dans la synchro"
+  reset: "Remettre les zones par défaut"

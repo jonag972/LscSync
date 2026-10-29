@@ -45,7 +45,15 @@ impl Root {
                 sync_device,
             } => {
                 self.profile.merge_devices(devices.clone());
-                self.set_sync_device(sync_device.clone(), cx);
+                if !self
+                    .profile
+                    .devices
+                    .iter()
+                    .any(|d| d.id == *sync_device && d.synced)
+                {
+                    self.toggle_synced(sync_device, cx);
+                }
+                self.save();
                 self.setup = None;
                 self.page = Page::Sync;
             }
@@ -55,18 +63,16 @@ impl Root {
         cx.notify();
     }
 
-    /// Changes the device that follows the screen, restarting a running sync.
-    pub(crate) fn set_sync_device(&mut self, id: String, cx: &mut Context<Self>) {
-        if self.profile.sync_device.as_deref() == Some(id.as_str()) {
-            self.save();
-            return;
-        }
-        self.profile.sync_device = Some(id);
+    /// Adds a device to the sync or removes it, restarting a running sync.
+    pub(crate) fn toggle_synced(&mut self, id: &str, cx: &mut Context<Self>) {
+        let synced = self.profile.devices.iter().any(|d| d.id == id && d.synced);
+        self.profile.set_synced(id, !synced);
         self.save();
         if self.engine.is_some() {
             self.stop(cx);
             self.start(cx);
         }
+        cx.notify();
     }
 
     fn rescan(&mut self, cx: &mut Context<Self>) {
@@ -191,18 +197,14 @@ impl Root {
     }
 
     pub(crate) fn render_devices(&self, cx: &mut Context<Self>) -> Div {
-        let sync_id = self.profile.sync_device.clone();
         let mut list = card().gap(px(4.0)).p(px(6.0));
         for (index, device) in self.profile.devices.iter().enumerate() {
             let id = device.id.clone();
             list = list.child(device_row(
                 ("device", index),
                 device,
-                sync_id.as_deref() == Some(id.as_str()),
-                cx.listener(move |this, _, _, cx| {
-                    this.set_sync_device(id.clone(), cx);
-                    cx.notify();
-                }),
+                device.synced,
+                cx.listener(move |this, _, _, cx| this.open_device(id.clone(), cx)),
             ));
         }
 
@@ -227,6 +229,7 @@ impl Root {
                         )),
                     ),
             )
+            .child(self.render_overview())
             .child(list)
             .child(body(t!("devices.hint").to_string()))
             .when_some(self.notice.clone(), |this, notice| {

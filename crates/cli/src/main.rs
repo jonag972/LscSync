@@ -4,7 +4,7 @@ use std::time::{Duration, Instant};
 
 use lscsync_core::{Hsv, Profile, Settings};
 use lscsync_engine::tuya::{Lsc, LscConfig};
-use lscsync_engine::worker::Engine;
+use lscsync_engine::worker::{Engine, Target};
 use lscsync_platform::{legacy_settings_path, profile_path};
 
 const RED: Hsv = Hsv::new(0.0, 1.0, 1.0);
@@ -19,7 +19,6 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         Some("white") => block_on(white())?,
         Some("pattern") => block_on(pattern())?,
         Some("preview") => preview()?,
-        Some("test") => test_scene()?,
         Some("run") => run(parse_seconds(args.get(1)))?,
         Some("audio") => audio(parse_seconds(args.get(1)))?,
         Some("scan") => block_on(scan())?,
@@ -41,8 +40,7 @@ fn usage() {
     println!("  lscsync-cli white         sets the panels back to white");
     println!("  lscsync-cli pattern       red / green / blue on the 3 zones, then white");
     println!("  lscsync-cli preview       prints the captured colors, sends nothing");
-    println!("  lscsync-cli test          vivid colors through the worker path (5 s)");
-    println!("  lscsync-cli run [sec]     live ambilight (15 s by default)");
+    println!("  lscsync-cli run [sec]     live sync of the synced devices (15 s by default)");
     println!("  lscsync-cli audio [sec]   checks the sound capture, no panels needed");
     println!("  lscsync-cli scan          lists the Tuya devices on the local network");
     println!("  lscsync-cli login [--save] lists the account's devices via QR login");
@@ -99,27 +97,35 @@ async fn white() -> Result<(), Box<dyn std::error::Error>> {
     Ok(())
 }
 
-fn test_scene() -> Result<(), Box<dyn std::error::Error>> {
-    let (device, settings) = load()?;
-    let mut engine = Engine::new(&device, settings)?;
-    println!("test: vivid red / green / blue through the worker (5 s)");
-    engine.send_test(&[RED, GREEN, BLUE], Duration::from_secs(5))?;
-    engine.close();
-    println!("done");
-    Ok(())
+/// Synced devices, as engine targets, and the settings.
+fn load_targets() -> Result<(Vec<Target>, Settings), Box<dyn std::error::Error>> {
+    lscsync_platform::migrate_legacy_data()?;
+    let profile = Profile::load_or_migrate(&profile_path(), &legacy_settings_path())?;
+    let targets: Vec<Target> = profile
+        .sync_targets()
+        .map(|device| Target::new(device, profile.settings.capture_height))
+        .collect();
+    if targets.is_empty() {
+        return Err("no synced device in the profile".into());
+    }
+    Ok((targets, profile.settings))
 }
 
+/// The color each zone of each synced device would get from the screen.
 fn preview() -> Result<(), Box<dyn std::error::Error>> {
-    let (device, settings) = load()?;
-    let mut engine = Engine::new(&device, settings)?;
-    let snapshot = engine.preview()?;
-    println!("zones: {:?}", snapshot.zones);
-    println!("top:   {:?}", snapshot.top);
-    println!(
-        "DP 51 : {}",
-        lscsync_core::protocol::dp_scene_zones(&snapshot.zones, false)
-    );
-    engine.close();
+    let (targets, settings) = load_targets()?;
+    let image = lscsync_engine::capture::ScreenCapture::new()?.capture()?;
+    for target in &targets {
+        println!("{}:", target.name);
+        for (index, zone) in target.zones.iter().enumerate() {
+            let color = lscsync_core::color::to_lamp(
+                lscsync_core::color::dominant_color(&image.region(*zone)),
+                settings.boost_sat,
+                settings.lum_max as f32,
+            );
+            println!("  zone {}: {color:?}", index + 1);
+        }
+    }
     Ok(())
 }
 
@@ -234,16 +240,20 @@ fn login(save: bool) -> Result<(), Box<dyn std::error::Error>> {
 }
 
 fn run(seconds: u64) -> Result<(), Box<dyn std::error::Error>> {
-    let (device, settings) = load()?;
-    println!("ambilight for {} s on {}", seconds, device.ip);
+    let (targets, settings) = load_targets()?;
+    let names: Vec<&str> = targets.iter().map(|t| t.name.as_str()).collect();
+    println!(
+        "{:?} for {seconds} s on {}",
+        settings.mode,
+        names.join(", ")
+    );
 
-    let mut engine = Engine::new(&device, settings)?;
+    let mut engine = Engine::new(targets, settings, None)?;
     let stats = engine.run(Duration::from_secs(seconds))?;
     engine.close();
     println!(
-        "{} frames captured, {} sent in {:.1} s",
+        "{} frames computed in {:.1} s",
         stats.frames,
-        stats.sent,
         stats.elapsed.as_secs_f32()
     );
     println!("done");

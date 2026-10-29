@@ -15,8 +15,7 @@ use gpui_kit::prelude::FluentBuilder as _;
 use gpui_kit::*;
 use gpui_tray::{Icon, Tray};
 use lscsync_core::{Hsv, Mode, Preferences, Profile, Snapshot};
-use lscsync_engine::tuya::LscConfig;
-use lscsync_engine::worker::{EngineEvent, EngineHandle, ErrorKind};
+use lscsync_engine::worker::{EngineEvent, EngineHandle, ErrorKind, Target};
 use lscsync_platform::{legacy_settings_path, preferences_path, profile_path};
 use rust_i18n::t;
 
@@ -25,6 +24,7 @@ mod preferences;
 mod setup;
 mod theme;
 mod updates;
+mod zones;
 
 use theme::*;
 use updates::UpdateState;
@@ -84,10 +84,12 @@ enum Phase {
 }
 
 /// What the window shows when no setup is in progress.
-#[derive(Clone, Copy, PartialEq)]
+#[derive(Clone, PartialEq)]
 enum Page {
     Sync,
     Devices,
+    /// A device's page, by id: its zones on the screen.
+    Device(String),
     Settings,
 }
 
@@ -113,8 +115,16 @@ struct Root {
     scanning: bool,
     /// The profile changed under the sliders (import): resync on next render.
     sliders_stale: bool,
-    /// Whether the window is currently sized for the setup flow.
-    sized_for_setup: Option<bool>,
+    /// Content height the window is currently sized for.
+    sized_for: Option<f32>,
+    /// Screen capture behind the zones, on the device pages.
+    preview: Option<zones::ScreenPreview>,
+    /// Zone being moved or resized in the editor.
+    drag: Option<zones::Drag>,
+    /// Zone chosen in the editor, lit in white while the sync runs.
+    selected_zone: Option<usize>,
+    /// Synced devices that do not answer.
+    unreachable: Vec<String>,
     engine: Option<EngineHandle>,
     /// Stopped engine whose thread finishes in the background (back to white).
     retiring: Option<EngineHandle>,
@@ -193,7 +203,11 @@ impl Root {
             notice: None,
             scanning: false,
             sliders_stale: false,
-            sized_for_setup: None,
+            sized_for: None,
+            preview: None,
+            drag: None,
+            selected_zone: None,
+            unreachable: Vec::new(),
             engine: None,
             retiring: None,
             events: None,
@@ -268,6 +282,12 @@ impl Root {
             changed = true;
             match event {
                 EngineEvent::Snapshot(snapshot) => self.snapshot = Some(snapshot),
+                EngineEvent::DeviceUnreachable(name) => {
+                    if !self.unreachable.contains(&name) {
+                        self.unreachable.push(name);
+                    }
+                }
+                EngineEvent::DeviceBack(name) => self.unreachable.retain(|n| *n != name),
                 EngineEvent::Error { kind, message } => {
                     tracing::error!("engine stopped: {message}");
                     self.error = Some((kind, message));
@@ -346,6 +366,15 @@ impl Root {
             .unwrap_or_default()
     }
 
+    /// Content height for what the window shows.
+    fn wanted_height(&self) -> f32 {
+        match (&self.setup, &self.page) {
+            (Some(_), _) => SETUP_HEIGHT,
+            (None, Page::Devices | Page::Device(_)) => DEVICES_HEIGHT,
+            (None, _) => MAIN_HEIGHT,
+        }
+    }
+
     fn phase(&self) -> Phase {
         match (&self.engine, &self.snapshot, &self.error) {
             (Some(_), Some(_), _) => Phase::Running,
@@ -362,13 +391,20 @@ impl Root {
         self.read_sliders(cx);
         self.save();
         self.error = None;
-        let Some(device) = self.profile.sync_target().map(LscConfig::from) else {
+        let height = self.profile.settings.capture_height;
+        let targets: Vec<Target> = self
+            .profile
+            .sync_targets()
+            .map(|device| Target::new(device, height))
+            .collect();
+        if targets.is_empty() {
             self.error = Some((ErrorKind::NotConfigured, String::new()));
             cx.notify();
             return;
-        };
+        }
+        self.unreachable.clear();
         let (handle, receiver) =
-            EngineHandle::start_after(self.retiring.take(), device, self.profile.settings.clone());
+            EngineHandle::start_after(self.retiring.take(), targets, self.profile.settings.clone());
         self.engine = Some(handle);
         self.events = Some(receiver);
         cx.notify();
@@ -508,12 +544,9 @@ impl Root {
             .rounded(px(16.0))
             .overflow_hidden();
 
-        match (phase, self.snapshot) {
-            (Phase::Running, Some(snapshot)) => {
-                let colors: Vec<Hsv> = match self.profile.settings.mode {
-                    Mode::Screen => vec![snapshot.top],
-                    Mode::ScreenZones | Mode::Audio => snapshot.zones.to_vec(),
-                };
+        match (phase, &self.snapshot) {
+            (Phase::Running, Some(snapshot)) if !snapshot.zones.is_empty() => {
+                let colors: Vec<Hsv> = snapshot.zones.clone();
                 let tag = match self.profile.settings.mode {
                     Mode::ScreenZones => t!("hero.zones_screen"),
                     Mode::Screen => t!("hero.color_screen"),
@@ -675,12 +708,15 @@ impl Root {
                 cx,
                 percent,
             ))
-            .child(setting(
-                &t!("tuning.height"),
-                &self.capture_height,
-                cx,
-                percent,
-            ))
+            // Ambilight: each zone's height is set on its device's page.
+            .when(self.profile.settings.mode == Mode::Screen, |rows| {
+                rows.child(setting(
+                    &t!("tuning.height"),
+                    &self.capture_height,
+                    cx,
+                    percent,
+                ))
+            })
         };
         div()
             .flex()
@@ -748,13 +784,13 @@ impl Render for Root {
         if self.sliders_stale {
             self.sync_sliders(window, cx);
         }
-        // The setup flow needs less room: the window shrinks while it shows.
-        let setup = self.setup.is_some();
-        if self.sized_for_setup != Some(setup) {
-            if self.sized_for_setup.is_some() {
-                window.resize(window_size(setup));
+        // The setup flow needs less room, the device pages more.
+        let height = self.wanted_height();
+        if self.sized_for != Some(height) {
+            if self.sized_for.is_some() {
+                window.resize(window_size(height));
             }
-            self.sized_for_setup = Some(setup);
+            self.sized_for = Some(height);
         }
         let shell = div()
             .size_full()
@@ -769,8 +805,18 @@ impl Render for Root {
         if let Some(setup) = &self.setup {
             return shell.child(setup.clone());
         }
-        match self.page {
+        match &self.page {
             Page::Devices => return shell.child(self.render_devices(cx)),
+            Page::Device(id) => {
+                let page = self.render_device(&id.clone(), cx);
+                return shell
+                    .on_mouse_move(cx.listener(|this, event, _, cx| this.on_drag_move(event, cx)))
+                    .on_mouse_up(
+                        MouseButton::Left,
+                        cx.listener(|this, _, _, cx| this.end_drag(cx)),
+                    )
+                    .child(page);
+            }
             Page::Settings => return shell.child(self.render_preferences(cx)),
             Page::Sync => {}
         }
@@ -789,6 +835,21 @@ impl Render for Root {
             .child(self.render_hero(phase))
             .child(div().h(px(12.0)))
             .child(self.render_primary(phase, cx))
+            .when(
+                phase == Phase::Running && !self.unreachable.is_empty(),
+                |shell| {
+                    shell.child(
+                        div()
+                            .pt(px(8.0))
+                            .text_size(px(11.5))
+                            .text_color(rgb(TEXT_MUTED))
+                            .child(
+                                t!("sync.unreachable", names = self.unreachable.join(", "))
+                                    .to_string(),
+                            ),
+                    )
+                },
+            )
             .child(div().h(px(22.0)))
             .child(self.render_settings(cx))
             .child(div().flex_1())
@@ -1105,16 +1166,15 @@ fn with_root(cx: &mut App, update: impl FnOnce(&mut Root, &mut Context<Root>)) {
     root.update(cx, update);
 }
 
-fn window_size(setup: bool) -> Size<Pixels> {
-    let height = if setup { SETUP_HEIGHT } else { MAIN_HEIGHT };
+fn window_size(height: f32) -> Size<Pixels> {
     size(px(WINDOW_WIDTH), px(height + TITLEBAR_INSET))
 }
 
-fn window_options(setup: bool) -> WindowOptions {
+fn window_options(height: f32) -> WindowOptions {
     WindowOptions {
         window_bounds: Some(WindowBounds::Windowed(Bounds::new(
             point(px(260.0), px(120.0)),
-            window_size(setup),
+            window_size(height),
         ))),
         titlebar: Some(TitlebarOptions {
             title: Some("LscSync".into()),
@@ -1141,10 +1201,10 @@ fn show_window(cx: &mut App) {
         return;
     }
     let root = cx.global::<AppState>().root.clone();
-    let setup = root.read(cx).setup.is_some();
+    let height = root.read(cx).wanted_height();
     // A reopened window is sized for what it shows from the start.
-    root.update(cx, |root, _| root.sized_for_setup = None);
-    match gpui_kit::open_window(window_options(setup), cx, |_, _| root) {
+    root.update(cx, |root, _| root.sized_for = None);
+    match gpui_kit::open_window(window_options(height), cx, |_, _| root) {
         Ok((window, _)) => cx.global_mut::<AppState>().window = Some(window),
         Err(error) => tracing::error!("opening the window: {error}"),
     }
@@ -1214,7 +1274,7 @@ fn main() {
     tracing_subscriber::fmt()
         .with_env_filter(
             tracing_subscriber::EnvFilter::try_from_default_env()
-                .unwrap_or_else(|_| "lscsync_app=info".into()),
+                .unwrap_or_else(|_| "lscsync_app=info,lscsync_engine=info".into()),
         )
         .init();
 

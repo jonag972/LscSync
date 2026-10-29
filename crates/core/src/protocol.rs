@@ -20,10 +20,12 @@ pub const DP_POWER: &str = "20";
 pub const DP_MODE: &str = "21";
 pub const DP_COLOR: &str = "24";
 pub const DP_SCENE: &str = "51";
+pub const DP_MUSIC: &str = "27";
 
 pub const MODE_WHITE: &str = "white";
 pub const MODE_COLOR: &str = "colour";
 pub const MODE_SCENE: &str = "scene";
+pub const MODE_MUSIC: &str = "music";
 
 pub const NB_ZONES: usize = 3;
 
@@ -40,6 +42,45 @@ pub fn dp_color(color: Hsv) -> String {
     let s = ((color.s as f64 * 1000.0).round() as i64).clamp(0, 1000);
     let v = ((color.v as f64 * 1000.0).round() as i64).clamp(0, 1000);
     format!("{h:04x}{s:04x}{v:04x}")
+}
+
+/// DP 27 value (`music_data`) in direct mode: change mode, hue, saturation,
+/// value, then white brightness and temperature (unused). Applied without
+/// fade. Saturation and value are on 0-1000, although Tuya's description of
+/// the device says 0-255.
+pub fn dp_music(color: Hsv) -> String {
+    format!("0{}00000000", dp_color(color))
+}
+
+/// Colors of a DP 51 scene: the controller drives 12 segments (the LSC app
+/// shows them), the 6 panels of the kit being segments 1 to 6.
+pub const SCENE_SEGMENTS: usize = 12;
+
+/// DP 51 value giving each panel its own color, applied instantly: color
+/// `i` goes to panel `i + 1`. A single brightness for the whole scene, that
+/// of the brightest panel.
+pub fn dp_scene_panels(colors: &[Hsv]) -> String {
+    let max_v = colors.iter().map(|c| c.v).fold(0.0_f32, f32::max);
+    let luminosity = ((max_v as f64 * 100.0).round() as i64).clamp(1, 100) as u8;
+    let mut bytes = vec![
+        SCENE_VERSION,
+        SCENE_ID,
+        SCENE_STATIC,
+        SCENE_SPEED,
+        SCENE_SPEED,
+        SCENE_SPLIT,
+        0x00,
+        0x00,
+        luminosity,
+    ];
+    // Segments past the last panel repeat the colors: they light nothing.
+    for color in colors.iter().cycle().take(SCENE_SEGMENTS) {
+        let hue = ((color.h as f64 * 360.0).round() as i64).rem_euclid(360) as u16;
+        let saturation = ((color.s as f64 * 100.0).round() as i64).clamp(0, 100) as u8;
+        bytes.extend_from_slice(&hue.to_be_bytes());
+        bytes.push(saturation);
+    }
+    STANDARD.encode(bytes)
 }
 
 /// DP 51 value showing one color per zone (3 zones).
@@ -99,6 +140,24 @@ mod tests {
             .chunks(3)
             .map(|chunk| u16::from_be_bytes([chunk[0], chunk[1]]))
             .collect()
+    }
+
+    #[test]
+    fn panel_scene_has_12_segments() {
+        let bytes = STANDARD
+            .decode(dp_scene_panels(&[RED, GREEN, BLUE, RED, GREEN, BLUE]))
+            .expect("valid base64");
+        assert_eq!(bytes.len(), 9 + 12 * 3);
+        assert_eq!(bytes[8], 100);
+        assert_eq!(
+            hues(&dp_scene_panels(&[RED, GREEN, BLUE, RED, GREEN, BLUE]))[..7],
+            [0, 120, 240, 0, 120, 240, 0]
+        );
+    }
+
+    #[test]
+    fn dp_music_is_direct_hsv() {
+        assert_eq!(dp_music(RED), "0000003e803e800000000");
     }
 
     #[test]

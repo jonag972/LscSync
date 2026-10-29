@@ -11,10 +11,11 @@ status:
   synced_mode: "Synced · %{mode}"
   error: "Error"
   tooltip: "LscSync — %{status}"
+  live: "Live"
 
 mode:
-  ambilight: "Ambilight"
-  color: "Color"
+  ambilight: "Screen"
+  color: "Ambience"
   music: "Music"
   fixed: "Color"
 
@@ -27,10 +28,10 @@ hero:
   paused_body: "Start syncing to drive them."
 
 action:
-  start: "Start syncing"
+  start: "Start"
   retry: "Try again"
   cancel: "Cancel"
-  stop: "Stop"
+  stop: "Pause"
   back: "Back"
 
 tuning:
@@ -64,6 +65,7 @@ footer:
   devices_named: "Devices · %{name}"
   settings: "Settings"
   quit: "Quit"
+  manage: "Manage my lights"
 
 error:
   not_configured_title: "No device set up"
@@ -129,8 +131,8 @@ device:
   offline: "offline"
 
 devices:
-  title: "Devices"
-  hint: "Tap a device to place its zones on the screen."
+  title: "My lights"
+  hint: "Tap a light to place it on the screen."
   rescan: "Search the network"
   scanning: "Searching…"
   reconnect: "Reconnect my LSC account"
@@ -163,6 +165,7 @@ settings:
   about_heading: "ABOUT"
   source: "Source code and help"
   license: "Independent project, MIT license"
+  ambient: "Glowing background while syncing"
 
 update:
   available: "LscSync %{version} is available"
@@ -173,11 +176,11 @@ sync:
 
 zones:
   heading: "ZONES ON THE SCREEN · %{count}"
-  hint_running: "Drag a zone to move it, pull its corner to resize it. The selected zone lights up in white."
-  hint_stopped: "Drag a zone to move it, pull its corner to resize it. Start syncing to see the selected zone light up in white."
+  hint_running: "Drag a zone to move it, pull its corner to resize it. The chosen zone lights up in white."
+  hint_stopped: "Drag a zone to move it, pull its corner to resize it."
   panels: "Panels"
   in_sync: "In the sync"
-  reset: "Reset the zones"
+  reset: "Default"
 
 calibrate:
   title: "Color changes"
@@ -190,3 +193,15 @@ calibrate:
   sharp: "Calibrated: this light changes color instantly."
   fades: "This light always fades between colors: it follows the screen a little behind."
   failed: "The light didn't answer. Check that it's on."
+
+
+home:
+  screen: "Each light follows its part of the screen. Tap a light to place it."
+  ambience: "Your lights take the main color at the top of the screen."
+  music: "Your lights pulse with the bass of what's playing."
+  color: "Your lights stay on the color you pick."
+
+lights:
+  heading: "MY LIGHTS"
+  unused: "Not used in this mode"
+  unreachable: "Not answering"

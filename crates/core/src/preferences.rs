@@ -38,6 +38,9 @@ pub struct Preferences {
     pub language: Language,
     /// Look for a new version on GitHub at launch and once a day.
     pub check_updates: bool,
+    /// While syncing, the window's background takes a faint tint of the
+    /// lights.
+    pub ambient_background: bool,
     /// Update notice closed by the user: not shown again for this version.
     pub dismissed_update: Option<String>,
 }
@@ -47,6 +50,7 @@ impl Default for Preferences {
         Self {
             language: Language::Auto,
             check_updates: true,
+            ambient_background: true,
             dismissed_update: None,
         }
     }

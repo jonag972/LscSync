@@ -210,7 +210,11 @@ impl Root {
                 ("device", index),
                 device,
                 device.modes.contains(&self.profile.settings.mode),
-                cx.listener(move |this, _, _, cx| this.open_device(id.clone(), cx)),
+                // Back to the main page, with this light selected.
+                cx.listener(move |this, _, _, cx| {
+                    this.page = Page::Sync;
+                    this.select_light(Some(id.clone()), cx);
+                }),
             ));
         }
 
@@ -235,7 +239,6 @@ impl Root {
                         )),
                     ),
             )
-            .child(self.render_overview())
             .child(list)
             .child(body(t!("devices.hint").to_string()))
             .when_some(self.notice.clone(), |this, notice| {

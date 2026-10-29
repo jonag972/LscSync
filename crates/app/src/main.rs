@@ -11,7 +11,6 @@ use std::time::Duration;
 
 use gpui_kit::component::slider::{SliderEvent, SliderState};
 use gpui_kit::component::{Theme, ThemeMode};
-use gpui_kit::prelude::FluentBuilder as _;
 use gpui_kit::*;
 use gpui_tray::{Icon, Tray};
 use lscsync_core::{Hsv, Mode, Preferences, Profile, Snapshot};
@@ -20,12 +19,13 @@ use lscsync_platform::{legacy_settings_path, preferences_path, profile_path};
 use rust_i18n::t;
 
 mod devices;
+mod home;
 mod preferences;
+mod screen;
 mod setup;
 mod theme;
 mod tuning;
 mod updates;
-mod zones;
 
 use theme::*;
 use updates::UpdateState;
@@ -46,6 +46,7 @@ actions!(
         ModeAmbilight,
         ModeColor,
         ModeMusic,
+        ModeFixed,
         Noop
     ]
 );
@@ -88,9 +89,8 @@ enum Phase {
 #[derive(Clone, PartialEq)]
 enum Page {
     Sync,
+    /// Managing the devices: account, network, profile.
     Devices,
-    /// A device's page, by id: its zones on the screen.
-    Device(String),
     Settings,
 }
 
@@ -116,18 +116,27 @@ struct Root {
     scanning: bool,
     /// The profile changed under the sliders (import): resync on next render.
     sliders_stale: bool,
-    /// Content height the window is currently sized for.
-    sized_for: Option<f32>,
-    /// Screen capture behind the zones, on the device pages.
-    preview: Option<zones::ScreenPreview>,
-    /// Zone being moved or resized in the editor.
-    drag: Option<zones::Drag>,
-    /// Zone chosen in the editor, lit in white while the sync runs.
+    /// Content size the window is currently sized for.
+    sized_for: Option<(f32, f32)>,
+    /// Capture of the screen on the main page, refreshed now and then.
+    preview: Option<screen::ScreenPreview>,
+    /// A capture is under way.
+    capturing: bool,
+    /// Light whose zones are being edited and whose options show.
+    selected_light: Option<String>,
+    /// Zone being moved or resized.
+    drag: Option<screen::Drag>,
+    /// Zone chosen on the preview, lit in white while the sync runs.
     selected_zone: Option<usize>,
+    /// The lights' color behind the window, and how much it shows (0 to 1).
+    tint: Option<lscsync_core::Rgb>,
+    tint_level: f32,
+    /// Polls since the last screen capture.
+    polls_since_capture: u32,
     /// Synced devices that do not answer.
     unreachable: Vec<String>,
-    /// Calibration in progress on a device's page.
-    calibration: Option<zones::Calibration>,
+    /// Calibration of a light in progress.
+    calibration: Option<screen::Calibration>,
     engine: Option<EngineHandle>,
     /// Stopped engine whose thread finishes in the background (back to white).
     retiring: Option<EngineHandle>,
@@ -183,8 +192,13 @@ impl Root {
             sliders_stale: false,
             sized_for: None,
             preview: None,
+            capturing: false,
+            selected_light: None,
             drag: None,
             selected_zone: None,
+            tint: None,
+            tint_level: 0.0,
+            polls_since_capture: u32::MAX,
             unreachable: Vec::new(),
             calibration: None,
             engine: None,
@@ -217,9 +231,11 @@ impl Root {
                     .await;
                 if this
                     .update(cx, |root, cx| {
-                        if root.drain_events() {
+                        let changed = root.drain_events();
+                        if root.update_tint() || changed {
                             cx.notify();
                         }
+                        root.refresh_preview_now_and_then(cx);
                         root.sync_tray(cx);
                     })
                     .is_err()
@@ -324,12 +340,28 @@ impl Root {
             .unwrap_or_default()
     }
 
-    /// Content height for what the window shows.
-    fn wanted_height(&self) -> f32 {
-        match (&self.setup, &self.page) {
-            (Some(_), _) => SETUP_HEIGHT,
-            (None, Page::Devices | Page::Device(_)) => DEVICES_HEIGHT,
-            (None, _) => MAIN_HEIGHT,
+    /// Content size for what the window shows.
+    fn wanted_size(&self) -> (f32, f32) {
+        match self.setup {
+            Some(_) => (SETUP_WIDTH, SETUP_HEIGHT),
+            None => (WINDOW_WIDTH, MAIN_HEIGHT),
+        }
+    }
+
+    /// Keeps the screen preview fresh while the main page shows it and the
+    /// lights follow the screen.
+    fn refresh_preview_now_and_then(&mut self, cx: &mut Context<Self>) {
+        let shown = self.page == Page::Sync
+            && self.setup.is_none()
+            && cx
+                .try_global::<AppState>()
+                .is_some_and(|state| state.window.is_some());
+        let follows_screen = matches!(self.profile.settings.mode, Mode::ScreenZones | Mode::Screen);
+        self.polls_since_capture = self.polls_since_capture.saturating_add(1);
+        let due = self.polls_since_capture >= PREVIEW_POLLS || self.preview.is_none();
+        if shown && (follows_screen || self.preview.is_none()) && due && self.drag.is_none() {
+            self.polls_since_capture = 0;
+            self.refresh_preview(cx);
         }
     }
 
@@ -440,222 +472,6 @@ impl Root {
             cx.notify();
         }
     }
-
-    fn render_header(&self, phase: Phase) -> Div {
-        let (dot, label) = match phase {
-            Phase::Idle => (TEXT_FAINT, t!("status.paused")),
-            Phase::Connecting => (ACCENT, t!("status.connecting")),
-            Phase::Running => (SUCCESS, t!("status.synced")),
-            Phase::Failed => (DANGER_TEXT, t!("status.error")),
-        };
-        div()
-            .flex()
-            .items_center()
-            .justify_between()
-            .child(
-                div()
-                    .text_size(px(15.0))
-                    .font_weight(FontWeight::SEMIBOLD)
-                    .child("LscSync"),
-            )
-            .child(
-                div()
-                    .flex()
-                    .items_center()
-                    .gap(px(6.0))
-                    .text_size(px(11.5))
-                    .text_color(rgb(TEXT_MUTED))
-                    .child(div().size(px(6.0)).rounded_full().bg(rgb(dot)))
-                    .child(label.to_string()),
-            )
-    }
-
-    fn render_modes(&self, cx: &mut Context<Self>) -> Div {
-        let current = self.profile.settings.mode;
-        div()
-            .flex()
-            .gap(px(2.0))
-            .p(px(3.0))
-            .rounded(px(11.0))
-            .bg(rgb(SURFACE))
-            .border_1()
-            .border_color(rgb(LINE))
-            .child(mode_pill(Mode::ScreenZones, current, true, cx))
-            .child(mode_pill(Mode::Screen, current, true, cx))
-            .child(mode_pill(Mode::Audio, current, *AUDIO_SUPPORTED, cx))
-    }
-
-    fn render_hero(&self, phase: Phase) -> Div {
-        let hero = div()
-            .relative()
-            .h(px(160.0))
-            .rounded(px(16.0))
-            .overflow_hidden();
-
-        match (phase, &self.snapshot) {
-            (Phase::Running, Some(snapshot)) if snapshot.all().next().is_some() => {
-                let colors: Vec<Hsv> = snapshot.all().copied().collect();
-                let tag = match self.profile.settings.mode {
-                    Mode::ScreenZones => t!("hero.zones_screen"),
-                    Mode::Screen => t!("hero.color_screen"),
-                    Mode::Audio if *MUSIC_VIA_MICROPHONE => t!("hero.bass_microphone"),
-                    Mode::Audio => t!("hero.bass_zones"),
-                    Mode::Fixed => t!("mode.fixed"),
-                };
-                hero.child(
-                    color_bands(colors.into_iter().map(display_color), px(16.0))
-                        .absolute()
-                        .inset_0(),
-                )
-                .child(
-                    div()
-                        .absolute()
-                        .left(px(12.0))
-                        .bottom(px(12.0))
-                        .px(px(9.0))
-                        .py(px(4.0))
-                        .rounded_full()
-                        .bg(rgba(0x00000066))
-                        .text_size(px(11.0))
-                        .text_color(rgb(0xFFFFFF))
-                        .child(tag.to_string()),
-                )
-            }
-            _ => {
-                let (bg, line, title_color, title, body) = match phase {
-                    Phase::Failed => {
-                        let (title, body) = self.describe_error();
-                        (DANGER_BG, DANGER_LINE, DANGER_TEXT, title, body)
-                    }
-                    Phase::Connecting => (
-                        SURFACE,
-                        LINE,
-                        TEXT,
-                        t!("status.connecting_panels").to_string(),
-                        self.device_ip(),
-                    ),
-                    _ => (
-                        SURFACE,
-                        LINE,
-                        TEXT,
-                        t!("hero.paused_title").to_string(),
-                        t!("hero.paused_body").to_string(),
-                    ),
-                };
-                hero.flex()
-                    .flex_col()
-                    .items_center()
-                    .justify_center()
-                    .gap(px(4.0))
-                    .px(px(24.0))
-                    .bg(rgb(bg))
-                    .border_1()
-                    .border_color(rgb(line))
-                    .child(
-                        div()
-                            .text_size(px(13.5))
-                            .font_weight(FontWeight::MEDIUM)
-                            .text_color(rgb(title_color))
-                            .child(title),
-                    )
-                    .child(
-                        div()
-                            .text_size(px(12.0))
-                            .text_center()
-                            .text_color(rgb(TEXT_MUTED))
-                            .child(body),
-                    )
-            }
-        }
-    }
-
-    fn render_primary(&self, phase: Phase, cx: &mut Context<Self>) -> Stateful<Div> {
-        let (label, filled) = match phase {
-            Phase::Idle => (t!("action.start"), true),
-            Phase::Failed => (t!("action.retry"), true),
-            Phase::Connecting => (t!("action.cancel"), false),
-            Phase::Running => (t!("action.stop"), false),
-        };
-        div()
-            .id("primary")
-            .h(px(44.0))
-            .flex()
-            .items_center()
-            .justify_center()
-            .gap(px(8.0))
-            .rounded(px(12.0))
-            .cursor_pointer()
-            .text_size(px(13.5))
-            .on_click(cx.listener(|this, _, _, cx| this.primary_action(cx)))
-            .map(|button| {
-                if filled {
-                    button
-                        .bg(rgb(ACCENT))
-                        .text_color(rgb(ON_ACCENT))
-                        .font_weight(FontWeight::SEMIBOLD)
-                        .hover(|style| style.bg(rgb(ACCENT_HOVER)))
-                } else {
-                    button
-                        .bg(rgb(SURFACE))
-                        .border_1()
-                        .border_color(rgb(LINE))
-                        .text_color(rgb(TEXT))
-                        .font_weight(FontWeight::MEDIUM)
-                        .hover(|style| style.bg(rgb(SURFACE_HOVER)).border_color(rgb(LINE_STRONG)))
-                }
-            })
-            .when(phase == Phase::Running, |button| {
-                button.child(div().size(px(8.0)).rounded(px(2.0)).bg(rgb(TEXT)))
-            })
-            .child(label.to_string())
-    }
-
-    fn render_footer(&self, cx: &mut Context<Self>) -> Div {
-        div()
-            .flex()
-            .items_center()
-            .justify_between()
-            .pt(px(12.0))
-            .border_t_1()
-            .border_color(rgb(0x1C1C1F))
-            .text_size(px(11.5))
-            .text_color(rgb(TEXT_FAINT))
-            .child(
-                link(
-                    "devices",
-                    match self.profile.sync_target() {
-                        Some(device) => t!("footer.devices_named", name = device.name).to_string(),
-                        None => t!("footer.devices").to_string(),
-                    },
-                )
-                .text_size(px(11.5))
-                .on_click(cx.listener(|this, _, _, cx| {
-                    this.page = Page::Devices;
-                    cx.notify();
-                })),
-            )
-            .child(
-                div()
-                    .flex()
-                    .gap(px(16.0))
-                    .child(
-                        link("settings", t!("footer.settings").to_string())
-                            .text_size(px(11.5))
-                            .on_click(cx.listener(|this, _, _, cx| {
-                                this.page = Page::Settings;
-                                cx.notify();
-                            })),
-                    )
-                    .child(
-                        div()
-                            .id("quit")
-                            .cursor_pointer()
-                            .hover(|style| style.text_color(rgb(TEXT_MUTED)))
-                            .on_click(|_, _, cx| cx.quit())
-                            .child(t!("footer.quit").to_string()),
-                    ),
-            )
-    }
 }
 
 impl Render for Root {
@@ -663,83 +479,46 @@ impl Render for Root {
         if self.sliders_stale {
             self.sync_sliders(window, cx);
         }
-        // The setup flow needs less room, the device pages more.
-        let height = self.wanted_height();
-        if self.sized_for != Some(height) {
+        // The setup flow has its own small window.
+        let size = self.wanted_size();
+        if self.sized_for != Some(size) {
             if self.sized_for.is_some() {
-                window.resize(window_size(height));
+                window.resize(window_size(size));
             }
-            self.sized_for = Some(height);
+            self.sized_for = Some(size);
         }
         let shell = div()
             .size_full()
             .flex()
             .flex_col()
-            .bg(rgb(BG))
+            .bg(self.background())
             .font_family(FONT)
-            .text_color(rgb(TEXT))
-            .pt(px(TITLEBAR_INSET + 18.0))
-            .px(px(22.0))
-            .pb(px(16.0));
+            .text_color(rgb(TEXT));
         if let Some(setup) = &self.setup {
-            return shell.child(setup.clone());
+            return shell
+                .pt(px(TITLEBAR_INSET + 18.0))
+                .px(px(22.0))
+                .pb(px(16.0))
+                .child(setup.clone());
         }
-        match &self.page {
-            Page::Devices => return shell.child(self.render_devices(cx)),
-            Page::Device(id) => {
-                let page = self.render_device(&id.clone(), cx);
-                return shell
-                    .on_mouse_move(cx.listener(|this, event, _, cx| this.on_drag_move(event, cx)))
-                    .on_mouse_up(
-                        MouseButton::Left,
-                        cx.listener(|this, _, _, cx| this.end_drag(cx)),
-                    )
-                    .child(page);
-            }
-            Page::Settings => return shell.child(self.render_preferences(cx)),
-            Page::Sync => {}
-        }
-        let phase = self.phase();
-        let notice = self.render_update_notice(cx);
-        // The notice takes some of the header's breathing room.
-        let below_header = if notice.is_some() { 12.0 } else { 18.0 };
+        let page = match &self.page {
+            Page::Sync => return shell.child(self.render_home(cx)),
+            Page::Devices => self.render_devices(cx),
+            Page::Settings => self.render_preferences(cx),
+        };
+        // Secondary pages: a column in the middle of the wide window.
         shell
-            .child(self.render_header(phase))
-            .when_some(notice, |shell, notice| {
-                shell.child(div().h(px(14.0))).child(notice)
-            })
-            .child(div().h(px(below_header)))
-            .child(self.render_modes(cx))
-            .child(div().h(px(14.0)))
-            .child(self.render_hero(phase))
-            .child(div().h(px(12.0)))
-            .child(self.render_primary(phase, cx))
-            .when(
-                phase == Phase::Running && !self.unreachable.is_empty(),
-                |shell| {
-                    shell.child(
-                        div()
-                            .pt(px(8.0))
-                            .text_size(px(11.5))
-                            .text_color(rgb(TEXT_MUTED))
-                            .child(
-                                t!("sync.unreachable", names = self.unreachable.join(", "))
-                                    .to_string(),
-                            ),
-                    )
-                },
-            )
-            .child(div().h(px(22.0)))
+            .items_center()
+            .pt(px(TITLEBAR_INSET + 18.0))
+            .pb(px(16.0))
             .child(
-                // Scrolls when the Advanced adjustments do not fit.
                 div()
-                    .id("adjustments")
+                    .w(px(COLUMN_WIDTH))
                     .flex_1()
-                    .min_h(px(0.0))
-                    .overflow_y_scroll()
-                    .child(self.render_settings(cx)),
+                    .flex()
+                    .flex_col()
+                    .child(page),
             )
-            .child(self.render_footer(cx))
     }
 }
 
@@ -762,45 +541,6 @@ fn load_profile() -> Profile {
         tracing::warn!("migrated profile not saved: {error}");
     }
     profile
-}
-
-fn mode_pill(
-    target: Mode,
-    current: Mode,
-    available: bool,
-    cx: &mut Context<Root>,
-) -> Stateful<Div> {
-    let id = match target {
-        Mode::ScreenZones => "ambilight",
-        Mode::Screen => "color",
-        Mode::Audio => "music",
-        Mode::Fixed => "fixed",
-    };
-    let pill = div()
-        .id(id)
-        .flex_1()
-        .flex()
-        .justify_center()
-        .py(px(7.0))
-        .rounded(px(8.0))
-        .text_size(px(12.5))
-        .child(mode_label(target));
-
-    if !available {
-        return pill.text_color(rgb(TEXT_FAINT));
-    }
-    if target == current {
-        return pill
-            .bg(rgb(SURFACE_RAISED))
-            .border_1()
-            .border_color(rgb(LINE_STRONG))
-            .text_color(rgb(TEXT))
-            .font_weight(FontWeight::MEDIUM);
-    }
-    pill.cursor_pointer()
-        .text_color(rgb(TEXT_MUTED))
-        .hover(|style| style.text_color(rgb(TEXT)).bg(rgb(SURFACE_HOVER)))
-        .on_click(cx.listener(move |this, _, _, cx| this.set_mode(target, cx)))
 }
 
 /// Preview color: same hue as the panels, lightened so it stays readable on
@@ -912,6 +652,7 @@ fn tray_menu(cx: &mut App) -> Vec<MenuItem> {
         )
         .checked(mode == Mode::Audio)
         .disabled(!*AUDIO_SUPPORTED),
+        MenuItem::action(mode_label(Mode::Fixed), ModeFixed).checked(mode == Mode::Fixed),
         MenuItem::separator(),
         MenuItem::action(t!("menu.open").to_string(), ShowWindow),
         MenuItem::action(t!("menu.devices").to_string(), ShowDevices),
@@ -1009,15 +750,15 @@ fn with_root(cx: &mut App, update: impl FnOnce(&mut Root, &mut Context<Root>)) {
     root.update(cx, update);
 }
 
-fn window_size(height: f32) -> Size<Pixels> {
-    size(px(WINDOW_WIDTH), px(height + TITLEBAR_INSET))
+fn window_size((width, height): (f32, f32)) -> Size<Pixels> {
+    size(px(width), px(height + TITLEBAR_INSET))
 }
 
-fn window_options(height: f32) -> WindowOptions {
+fn window_options(content: (f32, f32)) -> WindowOptions {
     WindowOptions {
         window_bounds: Some(WindowBounds::Windowed(Bounds::new(
-            point(px(260.0), px(120.0)),
-            window_size(height),
+            point(px(160.0), px(120.0)),
+            window_size(content),
         ))),
         titlebar: Some(TitlebarOptions {
             title: Some("LscSync".into()),
@@ -1044,10 +785,10 @@ fn show_window(cx: &mut App) {
         return;
     }
     let root = cx.global::<AppState>().root.clone();
-    let height = root.read(cx).wanted_height();
+    let content = root.read(cx).wanted_size();
     // A reopened window is sized for what it shows from the start.
     root.update(cx, |root, _| root.sized_for = None);
-    match gpui_kit::open_window(window_options(height), cx, |_, _| root) {
+    match gpui_kit::open_window(window_options(content), cx, |_, _| root) {
         Ok((window, _)) => cx.global_mut::<AppState>().window = Some(window),
         Err(error) => tracing::error!("opening the window: {error}"),
     }
@@ -1170,6 +911,9 @@ fn main() {
                 if *AUDIO_SUPPORTED {
                     with_root(cx, |root, cx| root.set_mode(Mode::Audio, cx));
                 }
+            });
+            cx.on_action(|_: &ModeFixed, cx| {
+                with_root(cx, |root, cx| root.set_mode(Mode::Fixed, cx))
             });
 
             // Root::new picks the language: the menus come after it.

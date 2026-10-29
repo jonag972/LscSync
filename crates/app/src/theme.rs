@@ -22,16 +22,33 @@ pub const SUCCESS: u32 = 0x34D399;
 pub const DANGER_BG: u32 = 0x1A1213;
 pub const DANGER_LINE: u32 = 0x4A2629;
 pub const DANGER_TEXT: u32 = 0xF2A3A3;
+/// The monitor drawn around the screen preview.
+pub const MONITOR: u32 = 0x1C1C20;
+
+/// Each light's own color, on the preview and in the list.
+const IDENTITY_COLORS: [u32; 8] = [
+    0xE8A838, 0x5AB0E8, 0xD4537E, 0x34D399, 0xA78BFA, 0xF97316, 0x22D3EE, 0xF472B6,
+];
+
+pub fn identity_color(index: usize) -> u32 {
+    IDENTITY_COLORS[index % IDENTITY_COLORS.len()]
+}
 
 /// On macOS the title bar is transparent: leave room for the traffic lights.
 pub const TITLEBAR_INSET: f32 = if cfg!(target_os = "macos") { 28.0 } else { 0.0 };
 
-/// Window width, and its height for the main page, the setup flow and the
-/// device pages (they show the screen preview).
-pub const WINDOW_WIDTH: f32 = 400.0;
-pub const MAIN_HEIGHT: f32 = 610.0;
+/// The main window, wide: the screen on the left, a sidebar on the right.
+pub const WINDOW_WIDTH: f32 = 780.0;
+pub const MAIN_HEIGHT: f32 = 520.0;
+pub const SIDEBAR_WIDTH: f32 = 272.0;
+pub const PAGE_PADDING: f32 = 18.0;
+/// Width of the secondary pages' column (devices, settings).
+pub const COLUMN_WIDTH: f32 = 420.0;
+/// The first-run setup keeps a small window.
+pub const SETUP_WIDTH: f32 = 400.0;
 pub const SETUP_HEIGHT: f32 = 450.0;
-pub const DEVICES_HEIGHT: f32 = 690.0;
+/// Main page polls (every 40 ms) between two captures of the screen.
+pub const PREVIEW_POLLS: u32 = 40;
 
 pub const FONT: &str = "Geist";
 pub const FONT_MONO: &str = "Geist Mono";
@@ -46,25 +63,6 @@ static LOGO: LazyLock<Arc<Image>> = LazyLock::new(|| {
 
 pub fn app_logo(size: Pixels) -> Img {
     img(LOGO.clone()).size(size)
-}
-
-/// Side-by-side color bands with rounded outer corners. GPUI clips children
-/// to a rectangle, not to the parent's radius, so the end bands round
-/// themselves.
-pub fn color_bands(colors: impl IntoIterator<Item = Rgba>, radius: Pixels) -> Div {
-    let colors: Vec<Rgba> = colors.into_iter().collect();
-    let last = colors.len().saturating_sub(1);
-    div()
-        .flex()
-        .gap(px(2.0))
-        .children(colors.into_iter().enumerate().map(|(index, color)| {
-            div()
-                .flex_1()
-                .h_full()
-                .bg(color)
-                .when(index == 0, |band| band.rounded_l(radius))
-                .when(index == last, |band| band.rounded_r(radius))
-        }))
 }
 
 /// Full-width button: amber when it is the screen's main action.
@@ -176,7 +174,7 @@ pub fn row(label: String) -> Div {
 }
 
 /// On/off switch, amber when on.
-pub fn toggle(id: &'static str, on: bool) -> Stateful<Div> {
+pub fn toggle(id: impl Into<ElementId>, on: bool) -> Stateful<Div> {
     div()
         .id(id)
         .flex_none()

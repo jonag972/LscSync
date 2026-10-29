@@ -155,6 +155,15 @@ impl Root {
             .child(card().child(
                 row(t!("settings.language").to_string()).child(self.render_language_choice(cx)),
             ))
+            .child(card().child(row(t!("settings.ambient").to_string()).child(
+                toggle("ambient", self.preferences.ambient_background).on_click(cx.listener(
+                    |this, _, _, cx| {
+                        this.preferences.ambient_background = !this.preferences.ambient_background;
+                        this.save_preferences();
+                        cx.notify();
+                    },
+                )),
+            )))
             .child(section_label(t!("settings.updates_heading").to_string()))
             .child(self.render_updates(cx))
             .when(

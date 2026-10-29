@@ -9,10 +9,11 @@ status:
   synced_mode: "Synchronisé · %{mode}"
   error: "Erreur"
   tooltip: "LscSync — %{status}"
+  live: "En direct"
 
 mode:
-  ambilight: "Ambilight"
-  color: "Couleur"
+  ambilight: "Écran"
+  color: "Ambiance"
   music: "Musique"
   fixed: "Couleur"
 
@@ -25,10 +26,10 @@ hero:
   paused_body: "Lance la synchro pour les piloter."
 
 action:
-  start: "Démarrer la synchro"
+  start: "Lancer"
   retry: "Réessayer"
   cancel: "Annuler"
-  stop: "Arrêter"
+  stop: "Mettre en pause"
   back: "Retour"
 
 tuning:
@@ -62,6 +63,7 @@ footer:
   devices_named: "Appareils · %{name}"
   settings: "Réglages"
   quit: "Quitter"
+  manage: "Gérer mes lumières"
 
 error:
   not_configured_title: "Aucun appareil configuré"
@@ -127,8 +129,8 @@ device:
   offline: "hors ligne"
 
 devices:
-  title: "Appareils"
-  hint: "Touche un appareil pour placer ses zones sur l'écran."
+  title: "Mes lumières"
+  hint: "Touche une lumière pour la placer sur l'écran."
   rescan: "Rechercher sur le réseau"
   scanning: "Recherche en cours…"
   reconnect: "Reconnecter mon compte LSC"
@@ -161,6 +163,7 @@ settings:
   about_heading: "À PROPOS"
   source: "Code source et aide"
   license: "Projet indépendant, licence MIT"
+  ambient: "Fond lumineux pendant la synchro"
 
 update:
   available: "LscSync %{version} est disponible"
@@ -172,10 +175,10 @@ sync:
 zones:
   heading: "ZONES SUR L'ÉCRAN · %{count}"
   hint_running: "Glisse une zone pour la déplacer, tire son coin pour la redimensionner. La zone choisie s'allume en blanc."
-  hint_stopped: "Glisse une zone pour la déplacer, tire son coin pour la redimensionner. Lance la synchro pour voir la zone choisie s'allumer en blanc."
+  hint_stopped: "Glisse une zone pour la déplacer, tire son coin pour la redimensionner."
   panels: "Panneaux"
   in_sync: "Dans la synchro"
-  reset: "Remettre les zones par défaut"
+  reset: "Par défaut"
 
 calibrate:
   title: "Changements de couleur"
@@ -188,3 +191,15 @@ calibrate:
   sharp: "Calibré : cette lumière change de couleur instantanément."
   fades: "Cette lumière fait toujours un fondu entre deux couleurs : elle suit l'écran avec un léger retard."
   failed: "La lumière n'a pas répondu. Vérifie qu'elle est allumée."
+
+
+home:
+  screen: "Chaque lumière suit sa partie de l'écran. Touche une lumière pour la placer."
+  ambience: "Tes lumières prennent la couleur dominante du haut de l'écran."
+  music: "Tes lumières pulsent sur les basses de ce qui joue."
+  color: "Tes lumières restent sur la couleur que tu choisis."
+
+lights:
+  heading: "MES LUMIÈRES"
+  unused: "Pas utilisée dans ce mode"
+  unreachable: "Ne répond pas"

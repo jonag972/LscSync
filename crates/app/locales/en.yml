@@ -57,6 +57,9 @@ tuning:
   reactivity_low: "Gentle"
   reactivity_high: "Lively"
   heading: "ADJUSTMENTS"
+  music_delay: "Sound delay"
+  automatic: "%{value} (auto)"
+  music_delay_reset: "Back to automatic"
 
 footer:
   settings: "Settings"

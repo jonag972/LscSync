@@ -26,6 +26,11 @@ block2 = "0.6"
 [target.'cfg(any(target_os = "windows", target_os = "macos"))'.dependencies]
 cpal = "0.18"
 
+# Windows: tells whether the sound goes to a Bluetooth device (the version
+# cpal already uses).
+[target.'cfg(target_os = "windows")'.dependencies]
+windows = { version = "0.62", features = ["Win32_Media_Audio", "Win32_System_Com"] }
+
 # Linux: records the default output's monitor through PulseAudio (also served
 # by PipeWire on current distributions).
 [target.'cfg(target_os = "linux")'.dependencies]

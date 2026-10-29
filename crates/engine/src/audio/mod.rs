@@ -5,6 +5,7 @@
 //! the PulseAudio / PipeWire output monitor.
 
 pub mod bass;
+pub mod output;
 
 #[cfg(target_os = "macos")]
 pub mod macos;

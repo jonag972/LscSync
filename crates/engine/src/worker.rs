@@ -261,6 +261,12 @@ pub struct Engine {
     lit_top: Vec<Hsv>,
     audio: Option<crate::audio::PlatformAudioCapture>,
     bass: crate::audio::BassProcessor,
+    /// Music mode: delay before the lights show the sound (Bluetooth).
+    music_delay: Duration,
+    /// Music frames waiting for their time, oldest first.
+    delayed: std::collections::VecDeque<(Instant, Vec<Frame>, Snapshot)>,
+    /// What the lights show now, for the app.
+    shown: Snapshot,
     frames: u64,
 }
 
@@ -362,6 +368,7 @@ impl Engine {
             None
         };
 
+        let music_delay = music_delay(&settings);
         Ok(Self {
             runtime,
             settings,
@@ -372,6 +379,9 @@ impl Engine {
             lit_top: Vec::new(),
             audio,
             bass: crate::audio::BassProcessor::new(),
+            music_delay,
+            delayed: std::collections::VecDeque::new(),
+            shown: Snapshot::default(),
             frames: 0,
         })
     }
@@ -466,6 +476,9 @@ impl Engine {
             Update::Settings(settings) => {
                 // The mode stays the one the engine started with.
                 let mode = self.settings.mode;
+                if settings.music_delay != self.settings.music_delay && mode == Mode::Audio {
+                    self.music_delay = music_delay(&settings);
+                }
                 self.settings = settings;
                 self.settings.mode = mode;
             }
@@ -617,6 +630,7 @@ impl Engine {
             AudioHue::Fixed => self.settings.audio_fixed_hue as f32 / 360.0,
         };
         let zones = self.bass.process(&samples, hue, self.settings.audio_zones);
+        let mut frames = Vec::new();
         let mut devices = Vec::new();
         for link in &self.links {
             // The 3 music zones spread over the device's zones, left to right.
@@ -629,13 +643,26 @@ impl Engine {
                 Product::Panels => Frame::Zones(colors.clone()),
                 Product::Light => Frame::Color(zones[0]),
             };
-            link.frames.send_replace(Some(frame));
+            frames.push(frame);
             devices.push(DeviceColors {
                 id: link.id.clone(),
                 colors,
             });
         }
-        Ok(Snapshot { devices })
+        // The lights wait for the sound to come out of the speakers.
+        let now = Instant::now();
+        self.delayed
+            .push_back((now + self.music_delay, frames, Snapshot { devices }));
+        while let Some((due, _, _)) = self.delayed.front()
+            && *due <= now
+        {
+            let (_, frames, snapshot) = self.delayed.pop_front().expect("front exists");
+            for (link, frame) in self.links.iter().zip(frames) {
+                link.frames.send_replace(Some(frame));
+            }
+            self.shown = snapshot;
+        }
+        Ok(self.shown.clone())
     }
 
     /// Stops the device tasks, sets the devices back to white if asked, and
@@ -668,6 +695,19 @@ impl Engine {
             }
         });
     }
+}
+
+/// The delay the user chose, or the automatic one for the sound output.
+fn music_delay(settings: &Settings) -> Duration {
+    if settings.mode != Mode::Audio {
+        return Duration::ZERO;
+    }
+    let delay = match settings.music_delay {
+        Some(ms) => Duration::from_millis(ms.into()),
+        None => crate::audio::output::automatic_delay(),
+    };
+    tracing::info!("music delay: {} ms", delay.as_millis());
+    delay
 }
 
 /// What the loop logs: frames per minute and the slowest one, and every

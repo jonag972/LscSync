@@ -83,6 +83,10 @@ pub struct Settings {
     pub contrast: f32,
     /// Screen captures per second.
     pub frame_rate: u8,
+    /// Music mode: how long the lights wait so they land with the sound, in
+    /// milliseconds. None: automatic (a delay for Bluetooth speakers).
+    #[serde(rename = "music_delay_ms")]
+    pub music_delay: Option<u16>,
     /// Fixed color mode: hue (0 to 359) and saturation (0 for white).
     pub fixed_hue: u16,
     pub fixed_saturation: f32,
@@ -109,6 +113,7 @@ impl Default for Settings {
             vivid_priority: 4.3,
             contrast: 0.0,
             frame_rate: 25,
+            music_delay: None,
             fixed_hue: 30,
             fixed_saturation: 1.0,
         }

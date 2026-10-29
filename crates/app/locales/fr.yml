@@ -55,6 +55,9 @@ tuning:
   reactivity_low: "Douce"
   reactivity_high: "Vive"
   heading: "RÉGLAGES"
+  music_delay: "Décalage du son"
+  automatic: "%{value} (auto)"
+  music_delay_reset: "Revenir en automatique"
 
 footer:
   settings: "Réglages"

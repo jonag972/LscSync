@@ -10,6 +10,12 @@ use rust_i18n::t;
 use crate::theme::*;
 use crate::{MUSIC_VIA_MICROPHONE, Root, display_color};
 
+/// The delay Music mode applies by itself: for a Bluetooth speaker or
+/// headphones, the time their sound takes to come out. Checked once.
+static AUTOMATIC_MUSIC_DELAY: std::sync::LazyLock<u16> = std::sync::LazyLock::new(|| {
+    lscsync_engine::audio::output::automatic_delay().as_millis() as u16
+});
+
 /// Hues offered as swatches, in degrees.
 const SWATCH_HUES: [u16; 9] = [0, 25, 45, 60, 120, 175, 215, 265, 310];
 
@@ -29,10 +35,12 @@ pub enum Knob {
     HueSpeed,
     /// Hue of the Color mode.
     Hue,
+    /// Music mode: how long the lights wait for the sound (Bluetooth).
+    MusicDelay,
 }
 
 impl Knob {
-    pub const ALL: [Self; 12] = [
+    pub const ALL: [Self; 13] = [
         Self::Brightness,
         Self::Saturation,
         Self::Smoothing,
@@ -45,6 +53,7 @@ impl Knob {
         Self::FrameRate,
         Self::HueSpeed,
         Self::Hue,
+        Self::MusicDelay,
     ];
 
     /// Minimum, maximum and step, in slider units.
@@ -61,6 +70,7 @@ impl Knob {
             Self::FrameRate => (10.0, 50.0, 5.0),
             Self::HueSpeed => (5.0, 120.0, 5.0),
             Self::Hue => (0.0, 359.0, 1.0),
+            Self::MusicDelay => (0.0, 500.0, 10.0),
         }
     }
 
@@ -78,6 +88,7 @@ impl Knob {
             Self::FrameRate => settings.frame_rate as f32,
             Self::HueSpeed => settings.hue_speed as f32,
             Self::Hue => settings.fixed_hue as f32,
+            Self::MusicDelay => settings.music_delay.unwrap_or(*AUTOMATIC_MUSIC_DELAY) as f32,
         }
     }
 
@@ -95,6 +106,13 @@ impl Knob {
             Self::FrameRate => settings.frame_rate = value.round() as u8,
             Self::HueSpeed => settings.hue_speed = value.round() as u16,
             Self::Hue => settings.fixed_hue = value.round() as u16,
+            // Every slider is read on each move: the automatic delay only
+            // becomes a chosen one when this slider moved.
+            Self::MusicDelay => {
+                if (value - self.get(settings)).abs() >= 1.0 {
+                    settings.music_delay = Some(value.round() as u16);
+                }
+            }
         }
     }
 
@@ -111,6 +129,7 @@ impl Knob {
             Self::FrameRate => t!("tuning.frame_rate"),
             Self::HueSpeed => t!("tuning.hue_speed"),
             Self::Hue => t!("tuning.hue"),
+            Self::MusicDelay => t!("tuning.music_delay"),
         }
         .to_string()
     }
@@ -133,6 +152,7 @@ impl Knob {
             Self::FrameRate => t!("tuning.fps", count = value.round() as u32).to_string(),
             Self::Hue => format!("{}°", value.round() as u32),
             Self::HueSpeed => format!("{} s", value.round() as u32),
+            Self::MusicDelay => format!("{} ms", value.round() as u32),
             _ => format!("{}%", value.round() as u32),
         }
     }
@@ -193,7 +213,15 @@ impl Root {
     fn knob(&self, knob: Knob, cx: &Context<Self>) -> Option<Div> {
         let (_, state) = self.sliders.iter().find(|(k, _)| *k == knob)?;
         let ends = knob.ends();
-        let value = (ends.is_none()).then(|| knob.format(slider_value(state, cx)));
+        let automatic = knob == Knob::MusicDelay && self.profile.settings.music_delay.is_none();
+        let value = (ends.is_none()).then(|| {
+            let value = knob.format(slider_value(state, cx));
+            if automatic {
+                t!("tuning.automatic", value = value).to_string()
+            } else {
+                value
+            }
+        });
         Some(
             div()
                 .flex()
@@ -311,9 +339,9 @@ impl Root {
             ],
             Mode::Screen => &[Knob::ScreenGlow, Knob::Vivid, Knob::Height, Knob::FrameRate],
             Mode::Audio if settings.audio_hue == AudioHue::Cycle => {
-                &[Knob::MusicGlow, Knob::HueSpeed]
+                &[Knob::MusicDelay, Knob::MusicGlow, Knob::HueSpeed]
             }
-            Mode::Audio => &[Knob::MusicGlow],
+            Mode::Audio => &[Knob::MusicDelay, Knob::MusicGlow],
             Mode::Fixed => &[],
         };
         let mut rows = div().flex().flex_col().gap(px(4.0));
@@ -341,6 +369,20 @@ impl Root {
         }
         for knob in knobs {
             rows = rows.children(self.knob(*knob, cx));
+        }
+        if mode == Mode::Audio && settings.music_delay.is_some() {
+            rows = rows.child(
+                div().flex().justify_end().child(
+                    link(
+                        "music-delay-auto",
+                        t!("tuning.music_delay_reset").to_string(),
+                    )
+                    .text_size(px(11.5))
+                    .on_click(cx.listener(|this, _, _, cx| {
+                        this.change_settings(|s| s.music_delay = None, cx)
+                    })),
+                ),
+            );
         }
         if mode == Mode::Audio {
             rows = rows.child(switch_row(

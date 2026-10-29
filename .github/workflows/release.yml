@@ -100,6 +100,33 @@ jobs:
           pattern: macos-*
           path: binaries
 
+      # The self-signed certificate keeps the app's identity the same from one
+      # version to the next, so macOS keeps its Screen Recording permission.
+      # Without it (forks), the app is signed ad hoc.
+      - name: Import the signing certificate
+        env:
+          MACOS_CERTIFICATE: ${{ secrets.MACOS_CERTIFICATE }}
+          MACOS_CERTIFICATE_PASSWORD: ${{ secrets.MACOS_CERTIFICATE_PASSWORD }}
+        run: |
+          if [ -z "$MACOS_CERTIFICATE" ]; then
+            echo "::warning::no MACOS_CERTIFICATE secret: ad hoc signature"
+            exit 0
+          fi
+          keychain="$RUNNER_TEMP/signing.keychain-db"
+          password=$(openssl rand -base64 24)
+          echo "$MACOS_CERTIFICATE" | base64 --decode > "$RUNNER_TEMP/signing.p12"
+          security create-keychain -p "$password" "$keychain"
+          security set-keychain-settings -lut 3600 "$keychain"
+          security unlock-keychain -p "$password" "$keychain"
+          security import "$RUNNER_TEMP/signing.p12" -k "$keychain" \
+            -P "$MACOS_CERTIFICATE_PASSWORD" -T /usr/bin/codesign
+          security set-key-partition-list -S apple-tool:,apple: -s -k "$password" "$keychain" >/dev/null
+          security list-keychains -d user -s "$keychain" $(security list-keychains -d user | tr -d '"')
+          identity=$(security find-certificate -c "LscSync Self-Signed" -Z "$keychain" \
+            | awk '/SHA-1 hash/ { print $3 }')
+          echo "CODESIGN_IDENTITY=$identity" >> "$GITHUB_ENV"
+          echo "CODESIGN_KEYCHAIN=$keychain" >> "$GITHUB_ENV"
+
       - name: Merge both architectures into a .app and a .dmg
         run: |
           for target in aarch64-apple-darwin x86_64-apple-darwin; do
@@ -215,6 +242,23 @@ jobs:
           pattern: dist-*
           path: dist
           merge-multiple: true
+
+      # The app checks this signature before installing an update.
+      - name: Sign the list of files
+        env:
+          UPDATE_SIGNING_KEY: ${{ secrets.UPDATE_SIGNING_KEY }}
+        run: |
+          if [ -z "$UPDATE_SIGNING_KEY" ]; then
+            echo "::error::no UPDATE_SIGNING_KEY secret: the app could not update to this release"
+            exit 1
+          fi
+          cd dist
+          sha256sum -- * > SHA256SUMS
+          printf '%s\n' "$UPDATE_SIGNING_KEY" > "$RUNNER_TEMP/update-key.pem"
+          openssl pkeyutl -sign -rawin -inkey "$RUNNER_TEMP/update-key.pem" \
+            -in SHA256SUMS | base64 > SHA256SUMS.sig
+          rm "$RUNNER_TEMP/update-key.pem"
+          cat SHA256SUMS
 
       - name: Create draft release
         env:

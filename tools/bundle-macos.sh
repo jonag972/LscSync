@@ -66,9 +66,16 @@ cat > "$APP/Contents/Resources/fr.lproj/InfoPlist.strings" <<EOF
 "NSMicrophoneUsageDescription" = "Sur macOS 12, le mode Musique écoute la pièce avec le micro pour faire pulser tes panneaux.";
 EOF
 
-# Ad hoc signature: macOS keeps the Screen Recording permission across
-# launches (without it, neither screen capture nor Music mode work).
-codesign --force --deep --sign - "$APP"
+# Signed so macOS keeps the Screen Recording permission (without it, neither
+# screen capture nor Music mode work). With CODESIGN_IDENTITY (the release
+# certificate, see .github/workflows/release.yml), the permission also
+# survives updates; otherwise an ad hoc signature, valid for this build only.
+if [ -n "${CODESIGN_IDENTITY:-}" ]; then
+    codesign --force --deep --sign "$CODESIGN_IDENTITY" \
+        ${CODESIGN_KEYCHAIN:+--keychain "$CODESIGN_KEYCHAIN"} "$APP"
+else
+    codesign --force --deep --sign - "$APP"
+fi
 
 echo "bundle: $APP"
 

@@ -17,7 +17,7 @@ AppId={{8C44332A-12AA-4BF2-840D-E5728FE2DD87}
 AppName={#DisplayName}
 AppVersion={#Version}
 AppVerName={#DisplayName} {#Version}
-AppPublisher=jonag972
+AppPublisher=Jonathan Gromat
 AppPublisherURL=https://github.com/jonag972/LscSync
 VersionInfoVersion={#Version}
 ; Per-user install: no administrator rights needed.

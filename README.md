@@ -128,5 +128,6 @@ workflow builds every download when a `v*` tag is pushed and opens a draft GitHu
 
 ## License
 
-[MIT](LICENSE). The bundled Geist fonts are under the
+Made by [Jonathan Gromat](https://jonathan-gromat.vercel.app/en). Released under the
+[MIT license](LICENSE); the bundled Geist fonts are under the
 [SIL Open Font License](crates/app/assets/fonts/OFL.txt).

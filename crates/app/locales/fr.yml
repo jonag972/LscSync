@@ -155,7 +155,7 @@ settings:
   checking: "Vérification…"
   check_failed: "Vérification impossible, réessaie plus tard"
   check_now: "Vérifier maintenant"
-  macos_permission: "Après la mise à jour, réautorise l'enregistrement de l'écran : macOS voit chaque nouvelle version comme une nouvelle app."
+  macos_permission: "Si macOS redemande l'enregistrement de l'écran après une mise à jour, autorise-le de nouveau."
   about_heading: "À PROPOS"
   source: "Code source et aide"
   license: "Projet indépendant, licence MIT"
@@ -164,6 +164,10 @@ settings:
 update:
   available: "LscSync %{version} est disponible"
   download: "Télécharger"
+  install: "Mettre à jour"
+  installing: "Mise à jour vers la %{version}…"
+  installing_short: "Mise à jour…"
+  install_failed: "La mise à jour n'a pas pu s'installer : télécharge-la à la main."
 
 zones:
   hint_running: "Glisse une zone pour la déplacer, tire son coin pour la redimensionner. La zone choisie s'allume en blanc."

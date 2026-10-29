@@ -157,7 +157,7 @@ settings:
   checking: "Checking…"
   check_failed: "Couldn't check, try again later"
   check_now: "Check now"
-  macos_permission: "After updating, allow Screen Recording again: macOS sees each new version as a new app."
+  macos_permission: "If macOS asks again for Screen Recording after an update, allow it again."
   about_heading: "ABOUT"
   source: "Source code and help"
   license: "Independent project, MIT license"
@@ -166,6 +166,10 @@ settings:
 update:
   available: "LscSync %{version} is available"
   download: "Download"
+  install: "Update"
+  installing: "Updating to %{version}…"
+  installing_short: "Updating…"
+  install_failed: "The update could not be installed: download it instead."
 
 zones:
   hint_running: "Drag a zone to move it, pull its corner to resize it. The chosen zone lights up in white."

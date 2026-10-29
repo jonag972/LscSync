@@ -75,6 +75,8 @@ Root: HKCU; Subkey: "Software\Microsoft\Windows\CurrentVersion\Run"; ValueType: 
 
 [Run]
 Filename: "{app}\{#Exe}"; Description: "{cm:LaunchNow}"; Flags: nowait postinstall skipifsilent
+; Silent install: an update started from the app, which restarts it.
+Filename: "{app}\{#Exe}"; Flags: nowait; Check: WizardSilent
 
 [UninstallRun]
 ; Stops the app before removing its files.

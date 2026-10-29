@@ -7,7 +7,9 @@ use lscsync_platform::preferences_path;
 use rust_i18n::t;
 
 use crate::theme::*;
-use crate::updates::{self, CHECK_INTERVAL, FIRST_CHECK_DELAY, REPOSITORY, UpdateState};
+use crate::updates::{
+    self, CHECK_INTERVAL, FIRST_CHECK_DELAY, Installation, REPOSITORY, UpdateState,
+};
 use crate::{Page, Root, app_menus, apply_language};
 
 impl Root {
@@ -32,7 +34,10 @@ impl Root {
     }
 
     pub(crate) fn check_updates(&mut self, cx: &mut Context<Self>) {
-        if matches!(self.update, UpdateState::Checking) {
+        if matches!(
+            self.update,
+            UpdateState::Checking | UpdateState::Installing(_)
+        ) {
             return;
         }
         self.update = UpdateState::Checking;
@@ -51,6 +56,71 @@ impl Root {
             });
         })
         .detach();
+    }
+
+    /// Downloads the update, checks its signature, starts its installation
+    /// and quits. Copies that cannot replace themselves (portable, development)
+    /// open the release page instead.
+    fn install_update(&mut self, cx: &mut Context<Self>) {
+        let Some(release) = self.update.available().cloned() else {
+            return;
+        };
+        let Some(installation) = Installation::current() else {
+            cx.open_url(&release.url);
+            return;
+        };
+        self.update = UpdateState::Installing(release.clone());
+        cx.notify();
+        cx.spawn(async move |this, cx| {
+            let installed = cx
+                .background_executor()
+                .spawn(async move {
+                    let update = updates::download(&release, &installation)?;
+                    updates::install(&installation, &update)
+                })
+                .await;
+            let _ = this.update(cx, |root, cx| match installed {
+                // The new version takes over: quitting also stops the sync.
+                Ok(()) => cx.quit(),
+                Err(error) => {
+                    tracing::error!("update: {error}");
+                    if let Some(release) = root.update.available().cloned() {
+                        root.update = UpdateState::InstallFailed(release);
+                    }
+                    cx.notify();
+                }
+            });
+        })
+        .detach();
+    }
+
+    /// "Update", "Updating…", or "Download" when installing failed or this
+    /// copy cannot replace itself.
+    fn update_action(&self, id: &'static str, cx: &mut Context<Self>) -> Option<Stateful<Div>> {
+        let release = self.update.available()?;
+        let accent = |label: String| {
+            div()
+                .id(id)
+                .cursor_pointer()
+                .text_color(rgb(ACCENT))
+                .hover(|style| style.text_color(rgb(ACCENT_HOVER)))
+                .child(label)
+        };
+        Some(match &self.update {
+            UpdateState::Installing(_) => div()
+                .id(id)
+                .text_color(rgb(TEXT_MUTED))
+                .child(t!("update.installing_short").to_string()),
+            UpdateState::Available(_) if Installation::current().is_some() => {
+                accent(t!("update.install").to_string())
+                    .on_click(cx.listener(|this, _, _, cx| this.install_update(cx)))
+            }
+            _ => {
+                let url = release.url.clone();
+                accent(t!("update.download").to_string())
+                    .on_click(move |_, _, cx| cx.open_url(&url))
+            }
+        })
     }
 
     fn save_preferences(&self) {
@@ -85,7 +155,12 @@ impl Root {
         if self.preferences.dismissed_update.as_deref() == Some(release.version.as_str()) {
             return None;
         }
-        let (url, version) = (release.url.clone(), release.version.clone());
+        let version = release.version.clone();
+        let text = match &self.update {
+            UpdateState::Installing(_) => t!("update.installing", version = version),
+            UpdateState::InstallFailed(_) => t!("update.install_failed"),
+            _ => t!("update.available", version = version),
+        };
         Some(
             div()
                 .flex()
@@ -99,20 +174,8 @@ impl Root {
                 .border_color(rgb(LINE_STRONG))
                 .text_size(px(12.5))
                 .child(div().size(px(6.0)).rounded_full().bg(rgb(ACCENT)))
-                .child(
-                    div()
-                        .flex_1()
-                        .child(t!("update.available", version = release.version).to_string()),
-                )
-                .child(
-                    div()
-                        .id("update-download")
-                        .cursor_pointer()
-                        .text_color(rgb(ACCENT))
-                        .hover(|style| style.text_color(rgb(ACCENT_HOVER)))
-                        .on_click(cx.listener(move |_, _, _, cx| cx.open_url(&url)))
-                        .child(t!("update.download").to_string()),
-                )
+                .child(div().flex_1().child(text.to_string()))
+                .children(self.update_action("update-download", cx))
                 .child(
                     div()
                         .id("update-dismiss")
@@ -243,20 +306,14 @@ impl Root {
             UpdateState::Available(release) => {
                 t!("update.available", version = release.version)
             }
+            UpdateState::Installing(release) => {
+                t!("update.installing", version = release.version)
+            }
+            UpdateState::InstallFailed(_) => t!("update.install_failed"),
             UpdateState::Failed => t!("settings.check_failed"),
         };
-        let action = match self.update.available() {
-            Some(release) => {
-                let url = release.url.clone();
-                div()
-                    .id("update-action")
-                    .cursor_pointer()
-                    .text_size(px(12.0))
-                    .text_color(rgb(ACCENT))
-                    .hover(|style| style.text_color(rgb(ACCENT_HOVER)))
-                    .on_click(move |_, _, cx| cx.open_url(&url))
-                    .child(t!("update.download").to_string())
-            }
+        let action = match self.update_action("update-action", cx) {
+            Some(action) => action.text_size(px(12.0)),
             None => link("update-action", t!("settings.check_now").to_string())
                 .on_click(cx.listener(|this, _, _, cx| this.check_updates(cx))),
         };

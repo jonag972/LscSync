@@ -5,7 +5,6 @@ status:
   paused: "En pause"
   connecting: "Connexion…"
   connecting_panels: "Connexion aux panneaux…"
-  synced: "Synchronisé"
   synced_mode: "Synchronisé · %{mode}"
   error: "Erreur"
   tooltip: "LscSync — %{status}"
@@ -17,14 +16,6 @@ mode:
   music: "Musique"
   fixed: "Couleur"
 
-hero:
-  zones_screen: "3 zones · écran"
-  color_screen: "1 couleur · écran"
-  bass_microphone: "Basses · micro"
-  bass_zones: "Basses · 3 zones"
-  paused_title: "Panneaux en pause"
-  paused_body: "Lance la synchro pour les piloter."
-
 action:
   start: "Lancer"
   retry: "Réessayer"
@@ -33,13 +24,12 @@ action:
   back: "Retour"
 
 tuning:
-  heading: "AJUSTEMENTS"
   brightness: "Luminosité"
   reactivity: "Réactivité"
   min_glow: "Lueur min."
-  saturation: "Saturation"
-  smoothing: "Fluidité"
-  height: "Hauteur"
+  saturation: "Couleurs"
+  smoothing: "Mouvement"
+  height: "Haut de l'écran utilisé"
   vivid: "Couleurs vives"
   contrast: "Contraste"
   frame_rate: "Images/s"
@@ -49,18 +39,24 @@ tuning:
   dark_hold: "Garder"
   dark_dim: "Baisser"
   music_color: "Couleur"
-  rainbow: "Arc-en-ciel"
-  fixed: "Fixe"
   hue: "Teinte"
   hue_speed: "Défilement"
   wave: "Vague de basses sur les panneaux"
   restore_white: "Blanc à l'arrêt"
-  advanced: "Avancé"
+  advanced: "Plus de réglages"
   microphone_note: "Sur macOS 12, le mode Musique écoute avec le micro du Mac : le son de la pièce compte aussi. Monte le volume des enceintes pour de meilleures basses (macOS 13 capte le son directement)."
+  color: "Couleur"
+  brightness_low: "Douce"
+  brightness_high: "Forte"
+  saturation_low: "Naturelles"
+  saturation_high: "Éclatantes"
+  smoothing_low: "Instantané"
+  smoothing_high: "En douceur"
+  reactivity_low: "Douce"
+  reactivity_high: "Vive"
+  heading: "RÉGLAGES"
 
 footer:
-  devices: "Appareils"
-  devices_named: "Appareils · %{name}"
   settings: "Réglages"
   quit: "Quitter"
   manage: "Gérer mes lumières"
@@ -169,21 +165,14 @@ update:
   available: "LscSync %{version} est disponible"
   download: "Télécharger"
 
-sync:
-  unreachable: "Ne répond pas : %{names}"
-
 zones:
-  heading: "ZONES SUR L'ÉCRAN · %{count}"
   hint_running: "Glisse une zone pour la déplacer, tire son coin pour la redimensionner. La zone choisie s'allume en blanc."
   hint_stopped: "Glisse une zone pour la déplacer, tire son coin pour la redimensionner."
   panels: "Panneaux"
-  in_sync: "Dans la synchro"
   reset: "Par défaut"
 
 calibrate:
-  title: "Changements de couleur"
   start: "Calibrer"
-  why: "Vérifie que cette lumière change de couleur instantanément, et choisit la meilleure façon de la piloter."
   watch: "Regarde la lumière : elle alterne rouge et bleu…"
   question: "Les couleurs changeaient-elles net, sans fondu ?"
   "yes": "Oui, net"
@@ -191,7 +180,6 @@ calibrate:
   sharp: "Calibré : cette lumière change de couleur instantanément."
   fades: "Cette lumière fait toujours un fondu entre deux couleurs : elle suit l'écran avec un léger retard."
   failed: "La lumière n'a pas répondu. Vérifie qu'elle est allumée."
-
 
 home:
   screen: "Chaque lumière suit sa partie de l'écran. Touche une lumière pour la placer."

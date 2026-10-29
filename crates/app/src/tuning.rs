@@ -1,14 +1,17 @@
-//! The adjustments under the main window's sync button: a few sliders per
-//! mode, and the rest in an Advanced section, folded by default.
+//! The adjustments in the main window's sidebar: a few sliders per mode,
+//! described in words, and the rest under "More settings", with exact values.
 
 use gpui_kit::component::slider::{Slider, SliderState, SliderValue};
 use gpui_kit::prelude::FluentBuilder as _;
 use gpui_kit::*;
-use lscsync_core::{AudioHue, DarkScenes, Mode, Settings};
+use lscsync_core::{AudioHue, DarkScenes, Hsv, Mode, Settings};
 use rust_i18n::t;
 
 use crate::theme::*;
-use crate::{MUSIC_VIA_MICROPHONE, Root};
+use crate::{MUSIC_VIA_MICROPHONE, Root, display_color};
+
+/// Hues offered as swatches, in degrees.
+const SWATCH_HUES: [u16; 9] = [0, 25, 45, 60, 120, 175, 215, 265, 310];
 
 /// A slider, in its own units (percent, tenths, frames per second…).
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -23,8 +26,9 @@ pub enum Knob {
     Vivid,
     Contrast,
     FrameRate,
-    FixedHue,
     HueSpeed,
+    /// Hue of the Color mode.
+    Hue,
 }
 
 impl Knob {
@@ -39,8 +43,8 @@ impl Knob {
         Self::Vivid,
         Self::Contrast,
         Self::FrameRate,
-        Self::FixedHue,
         Self::HueSpeed,
+        Self::Hue,
     ];
 
     /// Minimum, maximum and step, in slider units.
@@ -55,8 +59,8 @@ impl Knob {
             Self::Vivid => (10.0, 100.0, 5.0),
             Self::Contrast => (0.0, 100.0, 5.0),
             Self::FrameRate => (10.0, 50.0, 5.0),
-            Self::FixedHue => (0.0, 359.0, 1.0),
             Self::HueSpeed => (5.0, 120.0, 5.0),
+            Self::Hue => (0.0, 359.0, 1.0),
         }
     }
 
@@ -72,8 +76,8 @@ impl Knob {
             Self::Vivid => settings.vivid_priority * 10.0,
             Self::Contrast => settings.contrast * 100.0,
             Self::FrameRate => settings.frame_rate as f32,
-            Self::FixedHue => settings.audio_fixed_hue as f32,
             Self::HueSpeed => settings.hue_speed as f32,
+            Self::Hue => settings.fixed_hue as f32,
         }
     }
 
@@ -89,8 +93,8 @@ impl Knob {
             Self::Vivid => settings.vivid_priority = value / 10.0,
             Self::Contrast => settings.contrast = value / 100.0,
             Self::FrameRate => settings.frame_rate = value.round() as u8,
-            Self::FixedHue => settings.audio_fixed_hue = value.round() as u16,
             Self::HueSpeed => settings.hue_speed = value.round() as u16,
+            Self::Hue => settings.fixed_hue = value.round() as u16,
         }
     }
 
@@ -105,17 +109,29 @@ impl Knob {
             Self::Vivid => t!("tuning.vivid"),
             Self::Contrast => t!("tuning.contrast"),
             Self::FrameRate => t!("tuning.frame_rate"),
-            Self::FixedHue => t!("tuning.hue"),
             Self::HueSpeed => t!("tuning.hue_speed"),
+            Self::Hue => t!("tuning.hue"),
         }
         .to_string()
+    }
+
+    /// The words at both ends of a main slider.
+    fn ends(self) -> Option<(String, String)> {
+        let (low, high) = match self {
+            Self::Brightness => (t!("tuning.brightness_low"), t!("tuning.brightness_high")),
+            Self::Saturation => (t!("tuning.saturation_low"), t!("tuning.saturation_high")),
+            Self::Smoothing => (t!("tuning.smoothing_low"), t!("tuning.smoothing_high")),
+            Self::Reactivity => (t!("tuning.reactivity_low"), t!("tuning.reactivity_high")),
+            _ => return None,
+        };
+        Some((low.to_string(), high.to_string()))
     }
 
     fn format(self, value: f32) -> String {
         match self {
             Self::Saturation | Self::Vivid => format!("×{:.1}", value / 10.0),
             Self::FrameRate => t!("tuning.fps", count = value.round() as u32).to_string(),
-            Self::FixedHue => format!("{}°", value.round() as u32),
+            Self::Hue => format!("{}°", value.round() as u32),
             Self::HueSpeed => format!("{} s", value.round() as u32),
             _ => format!("{}%", value.round() as u32),
         }
@@ -142,7 +158,8 @@ pub fn sliders(settings: &Settings, cx: &mut Context<Root>) -> Vec<(Knob, Entity
 }
 
 impl Root {
-    /// Moves the sliders to the profile's settings (after an import).
+    /// Moves the sliders to the profile's settings (after an import, or a
+    /// swatch that changed a hue).
     pub(crate) fn sync_sliders(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         for (knob, slider) in &self.sliders {
             let (min, max, _) = knob.range();
@@ -159,180 +176,103 @@ impl Root {
         }
     }
 
-    /// A setting that is not a slider changed: applied live and saved.
+    /// A setting that is not a slider changed: applied live and saved. The
+    /// sliders follow, in case it is one of their values.
     fn change_settings(&mut self, change: impl FnOnce(&mut Settings), cx: &mut Context<Self>) {
         change(&mut self.profile.settings);
         if let Some(engine) = &self.engine {
             engine.update(self.profile.settings.clone());
         }
         self.save();
+        self.sliders_stale = true;
         cx.notify();
     }
 
-    fn knob_row(&self, knob: Knob, cx: &Context<Self>) -> Option<Div> {
+    /// A slider with its label; words at both ends for the main ones, the
+    /// exact value for the others.
+    fn knob(&self, knob: Knob, cx: &Context<Self>) -> Option<Div> {
         let (_, state) = self.sliders.iter().find(|(k, _)| *k == knob)?;
-        let value = slider_value(state, cx);
+        let ends = knob.ends();
+        let value = (ends.is_none()).then(|| knob.format(slider_value(state, cx)));
         Some(
             div()
                 .flex()
-                .items_center()
-                .gap(px(12.0))
-                .h(px(38.0))
-                .child(label_cell(knob.label()))
+                .flex_col()
+                .gap(px(6.0))
+                .py(px(4.0))
+                .child(
+                    div()
+                        .flex()
+                        .justify_between()
+                        .text_size(px(12.5))
+                        .text_color(rgb(TEXT_SOFT))
+                        .child(knob.label())
+                        .when_some(value, |row, value| {
+                            row.child(
+                                div()
+                                    .font_family(FONT_MONO)
+                                    .text_size(px(11.5))
+                                    .text_color(rgb(TEXT_MUTED))
+                                    .child(value),
+                            )
+                        }),
+                )
                 .child(
                     Slider::new(state)
                         .horizontal()
-                        .flex_1()
                         .bg(rgb(ACCENT))
                         .text_color(rgb(TEXT)),
                 )
-                .child(
-                    div()
-                        .w(px(46.0))
-                        .flex()
-                        .justify_end()
-                        .font_family(FONT_MONO)
-                        .text_size(px(12.0))
-                        .text_color(rgb(TEXT_SOFT))
-                        .child(knob.format(value)),
-                ),
+                .when_some(ends, |this, (low, high)| {
+                    this.child(
+                        div()
+                            .flex()
+                            .justify_between()
+                            .text_size(px(10.5))
+                            .text_color(rgb(TEXT_FAINT))
+                            .child(low)
+                            .child(high),
+                    )
+                }),
         )
     }
 
     pub(crate) fn render_settings(&self, cx: &mut Context<Self>) -> Div {
         let settings = &self.profile.settings;
         let mode = settings.mode;
-        let (main, advanced): (&[Knob], &[Knob]) = match mode {
-            Mode::ScreenZones => (
-                &[Knob::Brightness, Knob::Saturation, Knob::Smoothing],
-                &[
-                    Knob::ScreenGlow,
-                    Knob::Vivid,
-                    Knob::Contrast,
-                    Knob::FrameRate,
-                ],
-            ),
-            Mode::Screen => (
-                &[
-                    Knob::Brightness,
-                    Knob::Saturation,
-                    Knob::Smoothing,
-                    Knob::Height,
-                ],
-                &[Knob::ScreenGlow, Knob::Vivid, Knob::FrameRate],
-            ),
-            Mode::Audio => (
-                &[Knob::Brightness, Knob::Reactivity, Knob::MusicGlow],
-                if settings.audio_hue == AudioHue::Fixed {
-                    &[Knob::FixedHue]
-                } else {
-                    &[Knob::HueSpeed]
-                },
-            ),
-            Mode::Fixed => (&[Knob::Brightness], &[]),
+        let main: &[Knob] = match mode {
+            Mode::ScreenZones | Mode::Screen => {
+                &[Knob::Brightness, Knob::Saturation, Knob::Smoothing]
+            }
+            Mode::Audio => &[Knob::Brightness, Knob::Reactivity],
+            Mode::Fixed => &[Knob::Hue, Knob::Brightness],
         };
-        let open = self.advanced_open;
-
-        let mut rows = div().flex().flex_col();
+        let mut rows = div().flex().flex_col().gap(px(4.0));
+        match mode {
+            Mode::Audio => rows = rows.child(self.render_music_swatches(cx)),
+            Mode::Fixed => rows = rows.child(self.render_color_swatches(cx)),
+            _ => {}
+        }
         for knob in main {
-            rows = rows.children(self.knob_row(*knob, cx));
+            rows = rows.children(self.knob(*knob, cx));
         }
         if mode == Mode::Audio && *MUSIC_VIA_MICROPHONE {
             // macOS 12 cannot capture the computer's sound without a driver:
             // say so, and how to get the best of the microphone.
             rows = rows.child(
                 div()
-                    .mt(px(6.0))
-                    .text_size(px(11.5))
-                    .line_height(px(17.0))
+                    .text_size(px(11.0))
+                    .line_height(px(16.0))
                     .text_color(rgb(TEXT_MUTED))
                     .child(t!("tuning.microphone_note").to_string()),
             );
         }
 
-        let mut extra = div().flex().flex_col();
-        if open {
-            if mode == Mode::Audio {
-                extra = extra.child(choice_row(
-                    t!("tuning.music_color").to_string(),
-                    vec![
-                        (
-                            "hue-cycle",
-                            t!("tuning.rainbow").to_string(),
-                            settings.audio_hue == AudioHue::Cycle,
-                            Box::new(cx.listener(|this, _, _, cx| {
-                                this.change_settings(|s| s.audio_hue = AudioHue::Cycle, cx)
-                            })) as ClickHandler,
-                        ),
-                        (
-                            "hue-fixed",
-                            t!("tuning.fixed").to_string(),
-                            settings.audio_hue == AudioHue::Fixed,
-                            Box::new(cx.listener(|this, _, _, cx| {
-                                this.change_settings(|s| s.audio_hue = AudioHue::Fixed, cx)
-                            })) as ClickHandler,
-                        ),
-                    ],
-                ));
-            } else {
-                let dark = settings.dark_scenes;
-                let option =
-                    |id: &'static str, key: &str, value: DarkScenes, cx: &mut Context<Self>| {
-                        (
-                            id,
-                            t!(key).to_string(),
-                            dark == value,
-                            Box::new(cx.listener(
-                                move |this: &mut Self, _: &ClickEvent, _: &mut Window, cx| {
-                                    this.change_settings(|s| s.dark_scenes = value, cx)
-                                },
-                            )) as ClickHandler,
-                        )
-                    };
-                extra = extra.child(choice_row(
-                    t!("tuning.dark").to_string(),
-                    vec![
-                        option("dark-follow", "tuning.dark_follow", DarkScenes::Follow, cx),
-                        option("dark-hold", "tuning.dark_hold", DarkScenes::Hold, cx),
-                        option("dark-dim", "tuning.dark_dim", DarkScenes::Dim, cx),
-                    ],
-                ));
-            }
-            for knob in advanced {
-                extra = extra.children(self.knob_row(*knob, cx));
-            }
-            if mode == Mode::Audio {
-                extra = extra.child(
-                    div().h(px(38.0)).flex().items_center().child(
-                        row(t!("tuning.wave").to_string())
-                            .flex_1()
-                            .text_color(rgb(TEXT_MUTED))
-                            .child(toggle("wave", settings.audio_zones).on_click(cx.listener(
-                                |this, _, _, cx| {
-                                    this.change_settings(|s| s.audio_zones = !s.audio_zones, cx)
-                                },
-                            ))),
-                    ),
-                );
-            }
-            extra = extra.child(
-                div().h(px(38.0)).flex().items_center().child(
-                    row(t!("tuning.restore_white").to_string())
-                        .flex_1()
-                        .text_color(rgb(TEXT_MUTED))
-                        .child(toggle("restore-white", settings.restore_white).on_click(
-                            cx.listener(|this, _, _, cx| {
-                                this.change_settings(|s| s.restore_white = !s.restore_white, cx)
-                            }),
-                        )),
-                ),
-            );
-        }
-
+        let open = self.advanced_open;
         div()
             .flex()
             .flex_col()
-            .gap(px(4.0))
+            .gap(px(6.0))
             .child(section_label(t!("tuning.heading").to_string()).mt(px(0.0)))
             .child(rows)
             .child(
@@ -344,53 +284,210 @@ impl Root {
                     .mt(px(4.0))
                     .py(px(8.0))
                     .border_t_1()
-                    .border_color(rgb(0x1C1C1F))
+                    .border_color(rgba(0xFFFFFF0F))
                     .cursor_pointer()
                     .text_size(px(12.0))
-                    .text_color(rgb(TEXT_SOFT))
+                    .text_color(rgb(TEXT_MUTED))
                     .hover(|style| style.text_color(rgb(TEXT)))
                     .on_click(cx.listener(|this, _, _, cx| {
                         this.advanced_open = !this.advanced_open;
                         cx.notify();
                     }))
                     .child(t!("tuning.advanced").to_string())
-                    .child(div().text_color(rgb(TEXT_FAINT)).child(if open {
-                        "▾"
-                    } else {
-                        "▸"
-                    })),
+                    .child(if open { "▾" } else { "›" }),
             )
-            .child(extra)
+            .when(open, |this| this.child(self.render_advanced(cx)))
+    }
+
+    fn render_advanced(&self, cx: &mut Context<Self>) -> Div {
+        let settings = &self.profile.settings;
+        let mode = settings.mode;
+        let knobs: &[Knob] = match mode {
+            Mode::ScreenZones => &[
+                Knob::ScreenGlow,
+                Knob::Vivid,
+                Knob::Contrast,
+                Knob::FrameRate,
+            ],
+            Mode::Screen => &[Knob::ScreenGlow, Knob::Vivid, Knob::Height, Knob::FrameRate],
+            Mode::Audio if settings.audio_hue == AudioHue::Cycle => {
+                &[Knob::MusicGlow, Knob::HueSpeed]
+            }
+            Mode::Audio => &[Knob::MusicGlow],
+            Mode::Fixed => &[],
+        };
+        let mut rows = div().flex().flex_col().gap(px(4.0));
+        if matches!(mode, Mode::ScreenZones | Mode::Screen) {
+            let dark = settings.dark_scenes;
+            let option =
+                |id: &'static str, key: &str, value: DarkScenes, cx: &mut Context<Self>| {
+                    (
+                        id,
+                        t!(key).to_string(),
+                        dark == value,
+                        Box::new(cx.listener(move |this: &mut Self, _: &ClickEvent, _, cx| {
+                            this.change_settings(|s| s.dark_scenes = value, cx)
+                        })) as ClickHandler,
+                    )
+                };
+            rows = rows.child(choice(
+                t!("tuning.dark").to_string(),
+                vec![
+                    option("dark-follow", "tuning.dark_follow", DarkScenes::Follow, cx),
+                    option("dark-hold", "tuning.dark_hold", DarkScenes::Hold, cx),
+                    option("dark-dim", "tuning.dark_dim", DarkScenes::Dim, cx),
+                ],
+            ));
+        }
+        for knob in knobs {
+            rows = rows.children(self.knob(*knob, cx));
+        }
+        if mode == Mode::Audio {
+            rows = rows.child(switch_row(
+                "wave",
+                t!("tuning.wave").to_string(),
+                settings.audio_zones,
+                cx.listener(|this, _, _, cx| {
+                    this.change_settings(|s| s.audio_zones = !s.audio_zones, cx)
+                }),
+            ));
+        }
+        rows.child(switch_row(
+            "restore-white",
+            t!("tuning.restore_white").to_string(),
+            settings.restore_white,
+            cx.listener(|this, _, _, cx| {
+                this.change_settings(|s| s.restore_white = !s.restore_white, cx)
+            }),
+        ))
+    }
+
+    /// Music colors: the rainbow, or one hue.
+    fn render_music_swatches(&self, cx: &mut Context<Self>) -> Div {
+        let settings = &self.profile.settings;
+        let rainbow = settings.audio_hue == AudioHue::Cycle;
+        let mut swatches =
+            vec![
+                swatch("music-rainbow", None, rainbow).on_click(cx.listener(|this, _, _, cx| {
+                    this.change_settings(|s| s.audio_hue = AudioHue::Cycle, cx)
+                })),
+            ];
+        for hue in SWATCH_HUES {
+            let chosen = !rainbow && settings.audio_fixed_hue == hue;
+            swatches.push(
+                swatch(
+                    SharedString::from(format!("music-{hue}")),
+                    Some(Hsv::new(hue as f32 / 360.0, 1.0, 1.0)),
+                    chosen,
+                )
+                .on_click(cx.listener(move |this, _, _, cx| {
+                    this.change_settings(
+                        |s| {
+                            s.audio_hue = AudioHue::Fixed;
+                            s.audio_fixed_hue = hue;
+                        },
+                        cx,
+                    )
+                })),
+            );
+        }
+        swatch_row(t!("tuning.music_color").to_string(), swatches)
+    }
+
+    /// Color mode: white, or one of the hues (the Hue slider refines it).
+    fn render_color_swatches(&self, cx: &mut Context<Self>) -> Div {
+        let settings = &self.profile.settings;
+        let white = settings.fixed_saturation < 0.5;
+        let mut swatches =
+            vec![
+                swatch("color-white", Some(Hsv::new(0.0, 0.0, 1.0)), white).on_click(cx.listener(
+                    |this, _, _, cx| this.change_settings(|s| s.fixed_saturation = 0.0, cx),
+                )),
+            ];
+        for hue in SWATCH_HUES {
+            let chosen = !white && settings.fixed_hue == hue;
+            swatches.push(
+                swatch(
+                    SharedString::from(format!("color-{hue}")),
+                    Some(Hsv::new(hue as f32 / 360.0, 1.0, 1.0)),
+                    chosen,
+                )
+                .on_click(cx.listener(move |this, _, _, cx| {
+                    this.change_settings(
+                        |s| {
+                            s.fixed_hue = hue;
+                            s.fixed_saturation = 1.0;
+                        },
+                        cx,
+                    )
+                })),
+            );
+        }
+        swatch_row(t!("tuning.color").to_string(), swatches)
     }
 }
 
 type ClickHandler = Box<dyn Fn(&ClickEvent, &mut Window, &mut App) + 'static>;
 
-/// Slider label, the same width on every row so the sliders line up.
-fn label_cell(label: String) -> Div {
+/// A round color to pick; `None` draws the rainbow.
+fn swatch(id: impl Into<ElementId>, color: Option<Hsv>, chosen: bool) -> Stateful<Div> {
+    let dot = match color {
+        Some(color) => div().size(px(16.0)).rounded_full().bg(display_color(color)),
+        // Three hues side by side, for "all the colors".
+        None => div()
+            .size(px(16.0))
+            .rounded_full()
+            .overflow_hidden()
+            .flex()
+            .children(
+                [0xE0533A, 0x34D399, 0x5A7BE8].map(|hue| div().flex_1().h_full().bg(rgb(hue))),
+            ),
+    };
     div()
-        .w(px(96.0))
-        .flex_none()
-        .text_size(px(13.0))
-        .text_color(rgb(TEXT_MUTED))
-        .child(label)
+        .id(id)
+        .size(px(24.0))
+        .flex()
+        .items_center()
+        .justify_center()
+        .rounded_full()
+        .border_2()
+        .border_color(if chosen { rgb(TEXT) } else { rgba(0x00000000) })
+        .cursor_pointer()
+        .child(dot)
 }
 
-/// A label and a few mutually exclusive options.
-fn choice_row(label: String, options: Vec<(&'static str, String, bool, ClickHandler)>) -> Div {
+fn swatch_row(label: String, swatches: Vec<Stateful<Div>>) -> Div {
+    div()
+        .flex()
+        .flex_col()
+        .gap(px(6.0))
+        .py(px(4.0))
+        .child(
+            div()
+                .text_size(px(12.5))
+                .text_color(rgb(TEXT_SOFT))
+                .child(label),
+        )
+        .child(div().flex().flex_wrap().gap(px(2.0)).children(swatches))
+}
+
+/// A label and a few mutually exclusive options under it.
+fn choice(label: String, options: Vec<(&'static str, String, bool, ClickHandler)>) -> Div {
     let choices = div()
         .flex()
         .gap(px(2.0))
         .p(px(2.0))
         .rounded(px(8.0))
-        .bg(rgb(SURFACE))
+        .bg(rgba(0x151517CC))
         .border_1()
-        .border_color(rgb(LINE))
+        .border_color(rgba(0xFFFFFF12))
         .children(options.into_iter().map(|(id, text, chosen, on_click)| {
             div()
                 .id(id)
-                .px(px(8.0))
-                .py(px(3.0))
+                .flex_1()
+                .flex()
+                .justify_center()
+                .py(px(4.0))
                 .rounded(px(6.0))
                 .text_size(px(11.5))
                 .map(|option| {
@@ -408,12 +505,34 @@ fn choice_row(label: String, options: Vec<(&'static str, String, bool, ClickHand
         }));
     div()
         .flex()
-        .items_center()
-        .gap(px(12.0))
-        .h(px(38.0))
-        .child(label_cell(label))
-        .child(div().flex_1())
+        .flex_col()
+        .gap(px(6.0))
+        .py(px(4.0))
+        .child(
+            div()
+                .text_size(px(12.5))
+                .text_color(rgb(TEXT_SOFT))
+                .child(label),
+        )
         .child(choices)
+}
+
+fn switch_row(
+    id: &'static str,
+    label: String,
+    on: bool,
+    on_click: impl Fn(&ClickEvent, &mut Window, &mut App) + 'static,
+) -> Div {
+    div()
+        .flex()
+        .items_center()
+        .justify_between()
+        .gap(px(10.0))
+        .py(px(6.0))
+        .text_size(px(12.5))
+        .text_color(rgb(TEXT_SOFT))
+        .child(div().flex_1().child(label))
+        .child(toggle(id, on).on_click(on_click))
 }
 
 pub fn slider_value(state: &Entity<SliderState>, cx: &App) -> f32 {

@@ -4090,7 +4090,7 @@ checksum = "4050469837a6ff301cd14c1f8f24f88549e6d548f24f64e2148eb0f72cebc51f"
 
 [[package]]
 name = "lscsync-app"
-version = "0.2.0"
+version = "0.2.1"
 dependencies = [
  "base64 0.22.1",
  "ed25519-dalek",
@@ -4118,7 +4118,7 @@ dependencies = [
 
 [[package]]
 name = "lscsync-cli"
-version = "0.2.0"
+version = "0.2.1"
 dependencies = [
  "lscsync-cloud",
  "lscsync-core",
@@ -4131,7 +4131,7 @@ dependencies = [
 
 [[package]]
 name = "lscsync-cloud"
-version = "0.2.0"
+version = "0.2.1"
 dependencies = [
  "aes-gcm",
  "base64 0.22.1",
@@ -4148,7 +4148,7 @@ dependencies = [
 
 [[package]]
 name = "lscsync-core"
-version = "0.2.0"
+version = "0.2.1"
 dependencies = [
  "base64 0.22.1",
  "serde",
@@ -4158,7 +4158,7 @@ dependencies = [
 
 [[package]]
 name = "lscsync-engine"
-version = "0.2.0"
+version = "0.2.1"
 dependencies = [
  "block2 0.6.2",
  "cpal",
@@ -4181,7 +4181,7 @@ dependencies = [
 
 [[package]]
 name = "lscsync-platform"
-version = "0.2.0"
+version = "0.2.1"
 dependencies = [
  "directories",
 ]

@@ -1,0 +1,88 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.ref }}
+  # Pull requests: only the latest push matters. Branches: let each run finish
+  # so it can save the build cache.
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  fmt:
+    name: Check formatting (rustfmt)
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v5
+
+      # Installs the toolchain pinned in rust-toolchain.toml.
+      - uses: actions-rust-lang/setup-rust-toolchain@v1
+        with:
+          cache: false
+          # v1 sets RUSTFLAGS=-D warnings by default: keep builds as local
+          # ones (clippy is what denies warnings).
+          rustflags: ""
+
+      - name: Check that the code is formatted with rustfmt
+        run: cargo fmt --all -- --check
+
+  check:
+    name: ${{ matrix.name }}
+    runs-on: ${{ matrix.os }}
+    # A cold GPUI build on Windows takes ~20 min; with the cache, a few.
+    timeout-minutes: 60
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: macos-latest
+            name: Lint with clippy and run tests (macOS)
+          - os: windows-latest
+            name: Lint with clippy (Windows)
+          # Oldest supported base: xcap's PipeWire bindings need PipeWire 1.0
+          # headers (Ubuntu 22.04 ships 0.3). Binaries built here run on
+          # newer distributions.
+          - os: ubuntu-24.04
+            name: Lint with clippy (Linux)
+
+    steps:
+      - uses: actions/checkout@v5
+
+      - uses: actions-rust-lang/setup-rust-toolchain@v1
+        with:
+          cache: false
+          # v1 sets RUSTFLAGS=-D warnings by default: keep builds as local
+          # ones (clippy is what denies warnings).
+          rustflags: ""
+
+      - name: Install the Linux build dependencies
+        if: runner.os == 'Linux'
+        run: ./tools/linux-deps.sh
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          # One cache per OS, written only by pushes: pull requests read it
+          # without adding ~1 GB copies that evict each other.
+          shared-key: check
+          save-if: ${{ github.event_name == 'push' }}
+          cache-on-failure: true
+
+      - name: Lint with clippy (warnings fail the build)
+        run: cargo clippy --workspace --all-targets --locked -- -D warnings
+
+      # Tests are platform-independent logic: one OS is enough. The app crate
+      # has no tests, and building its harness would recompile GPUI for nothing.
+      - name: Run the unit tests (every crate but the app)
+        if: runner.os == 'macOS'
+        run: cargo test --workspace --exclude lscsync-app --locked

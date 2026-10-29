@@ -1,0 +1,31 @@
+[package]
+name = "lscsync-engine"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+lscsync-core = { workspace = true }
+rustuya = { workspace = true }
+thiserror = { workspace = true }
+tokio = { workspace = true }
+xcap = { workspace = true }
+realfft = { workspace = true }
+num-complex = { workspace = true }
+
+[target.'cfg(target_os = "macos")'.dependencies]
+objc2-screen-capture-kit = { workspace = true }
+objc2-core-media = { workspace = true }
+objc2 = "0.6"
+objc2-foundation = "0.3"
+block2 = "0.6"
+
+# Windows: WASAPI loopback (what the speakers play). macOS 12: microphone.
+[target.'cfg(any(target_os = "windows", target_os = "macos"))'.dependencies]
+cpal = "0.18"
+
+# Linux: records the default output's monitor through PulseAudio (also served
+# by PipeWire on current distributions).
+[target.'cfg(target_os = "linux")'.dependencies]
+libpulse-binding = "2.30"
+libpulse-simple-binding = "2.29"

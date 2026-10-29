@@ -1,0 +1,29 @@
+[package]
+name = "lscsync-app"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[[bin]]
+name = "lscsync"
+path = "src/main.rs"
+
+[dependencies]
+lscsync-core = { workspace = true }
+lscsync-engine = { workspace = true }
+lscsync-platform = { workspace = true }
+lscsync-cloud = { workspace = true }
+qrcode = { workspace = true }
+gpui-kit = { workspace = true }
+gpui-tray = { workspace = true }
+tracing = { workspace = true }
+tracing-subscriber = { workspace = true }
+
+[target.'cfg(target_os = "macos")'.dependencies]
+objc2 = "0.6"
+objc2-app-kit = "0.3"
+objc2-foundation = "0.3"
+
+# Windows .exe icon; build.rs only uses it for that target.
+[build-dependencies]
+embed-resource = "3"

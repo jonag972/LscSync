@@ -1,0 +1,220 @@
+name: Release
+
+# Pushing a v* tag builds the app for every OS and opens a draft GitHub
+# release with the downloads. Review it, then publish it by hand.
+# Changing the packaging (or running it manually) only builds the downloads,
+# as workflow artifacts, to catch packaging breakage before a release.
+
+on:
+  push:
+    tags: ["v*"]
+    branches: [main]
+    # Path filters only apply to branch pushes: tags always run.
+    paths:
+      - .github/workflows/release.yml
+      - tools/**
+      - installer/**
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: release-${{ github.ref }}
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  version:
+    name: Check the tag matches the Cargo.toml version
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    outputs:
+      version: ${{ steps.version.outputs.version }}
+    steps:
+      - uses: actions/checkout@v5
+
+      - id: version
+        run: |
+          version=$(sed -n '/^\[workspace.package\]/,/^\[/s/^version = "\(.*\)"/\1/p' Cargo.toml)
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+          if [[ "$GITHUB_REF" == refs/tags/* && "$GITHUB_REF_NAME" != "v$version" ]]; then
+            echo "::error::tag $GITHUB_REF_NAME does not match Cargo.toml version $version"
+            exit 1
+          fi
+
+  macos:
+    name: Build macOS app (${{ matrix.arch }})
+    needs: version
+    # Both architectures build in parallel on Apple Silicon runners; Intel is
+    # cross-compiled.
+    runs-on: macos-latest
+    timeout-minutes: 60
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - arch: Apple Silicon
+            target: aarch64-apple-darwin
+          - arch: Intel
+            target: x86_64-apple-darwin
+    steps:
+      - uses: actions/checkout@v5
+
+      - uses: actions-rust-lang/setup-rust-toolchain@v1
+        with:
+          cache: false
+          rustflags: ""
+          target: ${{ matrix.target }}
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          shared-key: release-${{ matrix.target }}
+          cache-on-failure: true
+
+      - name: Build the release binary
+        env:
+          # Oldest supported macOS (see tools/bundle-macos.sh).
+          MACOSX_DEPLOYMENT_TARGET: "12.3"
+        run: cargo build --release --locked -p lscsync-app --target ${{ matrix.target }}
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: macos-${{ matrix.target }}
+          path: target/${{ matrix.target }}/release/lscsync
+          if-no-files-found: error
+
+  macos-package:
+    name: Package the universal macOS app (.dmg)
+    needs: [version, macos]
+    runs-on: macos-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v5
+
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: macos-*
+          path: binaries
+
+      - name: Merge both architectures into a .app and a .dmg
+        run: |
+          for target in aarch64-apple-darwin x86_64-apple-darwin; do
+            mkdir -p "target/$target/release"
+            cp "binaries/macos-$target/lscsync" "target/$target/release/"
+            chmod +x "target/$target/release/lscsync"
+          done
+          ./tools/bundle-macos.sh --skip-build --dmg
+          mkdir -p dist
+          cp target/release/bundle/LscSync-*-macos.dmg dist/
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: dist-macos
+          path: dist/*
+          if-no-files-found: error
+
+  windows:
+    name: Build Windows app (installer and .zip)
+    needs: version
+    runs-on: windows-latest
+    timeout-minutes: 60
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - uses: actions/checkout@v5
+
+      - uses: actions-rust-lang/setup-rust-toolchain@v1
+        with:
+          cache: false
+          rustflags: ""
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          shared-key: release
+          cache-on-failure: true
+
+      - name: Build the release binary
+        run: cargo build --release --locked -p lscsync-app
+
+      # Inno Setup is preinstalled on GitHub's Windows runners. PowerShell, not
+      # Git's bash: bash would rewrite the /DVersion=... switch into a path.
+      - name: Build the installer
+        shell: pwsh
+        run: |
+          & "${env:ProgramFiles(x86)}\Inno Setup 6\ISCC.exe" "/DVersion=${{ needs.version.outputs.version }}" installer\windows.iss
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+
+      - name: Collect the installer and a portable .zip
+        run: |
+          version="${{ needs.version.outputs.version }}"
+          mkdir -p dist
+          cp "target/release/bundle/LscSync-$version-windows-setup.exe" dist/
+          7z a "dist/LscSync-$version-windows-portable.zip" ./target/release/lscsync.exe
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: dist-windows
+          path: dist/*
+          if-no-files-found: error
+
+  linux:
+    name: Build Linux app (AppImage)
+    needs: version
+    # Oldest supported base (see ci.yml): the AppImage runs on newer distributions.
+    runs-on: ubuntu-24.04
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v5
+
+      - uses: actions-rust-lang/setup-rust-toolchain@v1
+        with:
+          cache: false
+          rustflags: ""
+
+      - name: Install the Linux build dependencies
+        run: ./tools/linux-deps.sh
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          shared-key: release
+          cache-on-failure: true
+
+      - name: Build the AppImage
+        run: |
+          ./tools/appimage.sh
+          mkdir -p dist
+          cp target/release/bundle/LscSync-*-x86_64.AppImage dist/
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: dist-linux
+          path: dist/*
+          if-no-files-found: error
+
+  publish:
+    name: Create the draft GitHub release
+    needs: [macos-package, windows, linux]
+    if: startsWith(github.ref, 'refs/tags/v')
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: dist-*
+          path: dist
+          merge-multiple: true
+
+      - name: Create draft release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release create "$GITHUB_REF_NAME" dist/* \
+            --repo "$GITHUB_REPOSITORY" \
+            --draft \
+            --generate-notes \
+            --title "LscSync ${GITHUB_REF_NAME#v}"

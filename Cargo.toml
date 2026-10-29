@@ -1,0 +1,53 @@
+[workspace]
+resolver = "3"
+members = [
+    "crates/core",
+    "crates/engine",
+    "crates/platform",
+    "crates/app",
+    "crates/cli",
+    "crates/cloud",
+]
+
+[workspace.package]
+version = "0.1.0"
+edition = "2024"
+license = "MIT"
+repository = "https://github.com/jonag972/LscSync"
+
+[workspace.dependencies]
+lscsync-core = { path = "crates/core" }
+lscsync-engine = { path = "crates/engine" }
+lscsync-platform = { path = "crates/platform" }
+lscsync-cloud = { path = "crates/cloud" }
+
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+thiserror = "2"
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+base64 = "0.22"
+directories = "6"
+
+qrcode = { version = "0.14", default-features = false }
+gpui-kit = { version = "0.8.1", default-features = false, features = ["component"] }
+gpui-tray = { version = "0.3.0", default-features = false, features = ["gpui-kit", "menu-state"] }
+
+xcap = "0.9.8"
+realfft = "3.5.1"
+num-complex = "0.4"
+objc2-screen-capture-kit = "0.3.2"
+objc2-core-media = "0.3.2"
+rustuya = { version = "0.4.6", features = ["tokio"] }
+tokio = { version = "1", features = ["rt-multi-thread", "macros", "time", "sync"] }
+
+[profile.release]
+lto = "thin"
+codegen-units = 1
+strip = true
+opt-level = 3
+
+# Heavy dependencies (GPUI) are optimized even in dev builds, so the UI stays
+# smooth during development.
+[profile.dev.package."*"]
+opt-level = 2

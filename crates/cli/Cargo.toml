@@ -1,0 +1,18 @@
+[package]
+name = "lscsync-cli"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[[bin]]
+name = "lscsync-cli"
+path = "src/main.rs"
+
+[dependencies]
+lscsync-core = { workspace = true }
+lscsync-engine = { workspace = true }
+lscsync-platform = { workspace = true }
+lscsync-cloud = { workspace = true }
+qrcode = { workspace = true }
+rustuya = { workspace = true }
+tokio = { workspace = true }

@@ -1,0 +1,5 @@
+# Pinned so that a new Rust release never breaks the build unannounced.
+# Bump it on purpose, in its own commit.
+[toolchain]
+channel = "1.99.1"
+components = ["rustfmt", "clippy"]

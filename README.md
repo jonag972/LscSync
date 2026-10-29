@@ -19,12 +19,13 @@ A movie, a game, a playlist: the light behind your screen follows what's on it.
 LscSync sits quietly in your menu bar and drives your **LSC Smart Connect** panels
 directly over Wi-Fi.
 
-- **Ambilight**: the panels pick up the colors along the top of your screen, left, middle
-  and right.
-- **Color**: the whole room takes on the dominant color at the top of the screen.
-- **Music**: the panels light up on the bass, with a cycling or fixed color.
+- **Screen**: each light follows its own part of the screen, which you place on a live
+  preview of your screen. The LSC panels get one color per panel, instantly.
+- **Ambience**: every light takes the dominant color at the top of the screen.
+- **Music**: the lights pulse on the bass, in rainbow or in one color.
+- **Color**: a color you pick, for every light.
 
-One click to start. Brightness, saturation and smoothness apply live, while it runs.
+Pick which lights join each mode, then one click to start. Adjustments apply live.
 
 ## Install
 
@@ -43,7 +44,7 @@ system:
 
 | | macOS 13 or later | macOS 12.3 – 12.7 | Windows 10 and 11 | Linux (x86_64)\* |
 |---|---|---|---|---|
-| Ambilight, Color | ✓ | ✓ | ✓ | ✓ |
+| Screen, Ambience, Color | ✓ | ✓ | ✓ | ✓ |
 | Music | ✓ computer sound | ✓ through the microphone | ✓ computer sound | ✓ computer sound |
 
 On macOS 12, the system doesn't let apps hear the computer's sound, so Music mode listens
@@ -69,7 +70,7 @@ The first time you open the app, it walks you through it:
 3. Your devices show up, with the ones found on your Wi-Fi network ready to use. Pick the one
    that follows your screen, and you're done.
 
-To set up another computer without scanning again, use **Devices › Export profile**, then
+To set up another computer without scanning again, use **Manage my lights › Export profile**, then
 **Import** on the other computer. The exported file holds your devices' keys: keep it to
 yourself.
 
@@ -130,8 +131,9 @@ workflow builds every download when a `v*` tag is pushed and opens a draft GitHu
   release. Captured with ScreenCaptureKit on macOS 13+ (microphone on macOS 12), WASAPI
   loopback on Windows, and the output monitor through PulseAudio / PipeWire on Linux; no
   driver needed.
-- **Panels**: Tuya local protocol v3.5. Ambilight and Music use a scene (DP 51), applied
-  instantly, rather than the single color (DP 24), which fades. Formats found by trial and
+- **Panels**: Tuya local protocol v3.5. Screen and Music modes use a 12-segment scene
+  (DP 51), one color per panel, applied instantly; single colors go through DP 27, which
+  does not fade like DP 24. Formats found by trial and
   error: [docs/lsc-protocol.md](docs/lsc-protocol.md).
 
 ## License

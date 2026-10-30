@@ -4120,12 +4120,16 @@ dependencies = [
 name = "lscsync-cli"
 version = "0.2.2"
 dependencies = [
+ "aes-gcm",
+ "hmac 0.13.0",
  "lscsync-cloud",
  "lscsync-core",
  "lscsync-engine",
  "lscsync-platform",
  "qrcode",
  "rustuya",
+ "serde_json",
+ "sha2 0.11.1",
  "tokio",
 ]
 

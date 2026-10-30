@@ -83,6 +83,8 @@ jobs:
 
       # Tests are platform-independent logic: one OS is enough. The app crate
       # has no tests, and building its harness would recompile GPUI for nothing.
-      - name: Run the unit tests (every crate but the app)
+      # The cli's integration test speaks the Tuya v3.5 protocol to a fake panel
+      # on 127.0.0.1, so it runs anywhere.
+      - name: Run the tests, unit and integration (every crate but the app)
         if: runner.os == 'macOS'
         run: cargo test --workspace --exclude lscsync-app --locked

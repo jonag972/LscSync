@@ -21,6 +21,9 @@ pub struct LscConfig {
     pub device_id: String,
     pub local_key: String,
     pub ip: String,
+    /// TCP port of the controller (6668 for real panels). Tests point it at a
+    /// fake panel on another port.
+    pub port: u16,
 }
 
 impl From<&lscsync_core::Device> for LscConfig {
@@ -29,9 +32,13 @@ impl From<&lscsync_core::Device> for LscConfig {
             device_id: device.id.clone(),
             local_key: device.local_key.clone(),
             ip: device.ip.clone(),
+            port: DEFAULT_PORT,
         }
     }
 }
+
+/// The Tuya local protocol's TCP port.
+pub const DEFAULT_PORT: u16 = 6668;
 
 #[derive(Debug, Error)]
 pub enum LscError {
@@ -106,6 +113,7 @@ impl Lsc {
         let discovery = Discovery::new()?;
         let mut builder = Device::builder(config.device_id.clone(), config.local_key.clone())
             .version(Version::V3_5)
+            .port(config.port)
             .rediscover(&discovery);
         // Unknown address (fresh from the QR login): discovery finds it.
         if !config.ip.is_empty() {

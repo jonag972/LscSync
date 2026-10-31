@@ -35,8 +35,9 @@ objc2 = "0.6"
 objc2-app-kit = "0.3"
 objc2-foundation = "0.3"
 
-# Windows .exe icon; build.rs only uses it for that target.
-[build-dependencies]
+# Windows .exe icon only. All builds are native per-OS (CI and release), so
+# build.rs can gate on cfg(target_os) and this crate is not compiled elsewhere.
+[target.'cfg(windows)'.build-dependencies]
 embed-resource = "3"
 
 # Debian/Ubuntu package (tools/deb.sh). Paths are relative to this crate.

@@ -37,7 +37,7 @@ jobs:
       - name: Check that the code is formatted with rustfmt
         run: cargo fmt --all -- --check
 
-  check:
+  clippy:
     name: ${{ matrix.name }}
     runs-on: ${{ matrix.os }}
     # A cold GPUI build on Windows takes ~20 min; with the cache, a few.
@@ -46,15 +46,25 @@ jobs:
       fail-fast: false
       matrix:
         include:
+          # The app crate (GPUI) is linted on macOS only: it is by far the most
+          # expensive crate to build, and it has no OS-specific code beyond
+          # cfg(macos)/cfg(unix), which this runner covers. The per-OS code
+          # lives in the engine crate, linted on every OS below.
           - os: macos-latest
-            name: Lint with clippy and run tests (macOS)
+            name: Lint the whole workspace and run tests (macOS)
+            clippy-args: --workspace --all-targets
+            run-tests: true
           - os: windows-latest
-            name: Lint with clippy (Windows)
+            name: Lint the workspace without the app (Windows)
+            clippy-args: --workspace --exclude lscsync-app --all-targets
+            run-tests: false
           # Oldest supported base: xcap's PipeWire bindings need PipeWire 1.0
           # headers (Ubuntu 22.04 ships 0.3). Binaries built here run on
           # newer distributions.
           - os: ubuntu-24.04
-            name: Lint with clippy (Linux)
+            name: Lint the workspace without the app (Linux)
+            clippy-args: --workspace --exclude lscsync-app --all-targets
+            run-tests: false
 
     steps:
       - uses: actions/checkout@v5
@@ -70,6 +80,25 @@ jobs:
         if: runner.os == 'Linux'
         run: ./tools/linux-deps.sh
 
+      # Linking the app (GPUI) is a real bottleneck with the default linkers:
+      # use mold / lld where available (macOS keeps the default ld64).
+      - name: Install mold (Linux)
+        if: runner.os == 'Linux'
+        run: sudo apt-get install -y --no-install-recommends mold
+
+      - name: Use mold as the linker (Linux)
+        if: runner.os == 'Linux'
+        run: echo "CARGO_TARGET_X86_64_UNKNOWN_LINUX_GNU_LINKER=mold" >> "$GITHUB_ENV"
+
+      - name: Use lld-link as the linker (Windows)
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          if (-not (Get-Command lld-link -ErrorAction SilentlyContinue)) {
+            choco install -y lld
+          }
+          Add-Content -Path $env:GITHUB_ENV -Value "CARGO_TARGET_X86_64_PC_WINDOWS_MSVC_LINKER=lld-link"
+
       - uses: Swatinem/rust-cache@v2
         with:
           # One cache per OS, written only by pushes: pull requests read it
@@ -79,12 +108,12 @@ jobs:
           cache-on-failure: true
 
       - name: Lint with clippy (warnings fail the build)
-        run: cargo clippy --workspace --all-targets --locked -- -D warnings
+        run: cargo clippy ${{ matrix.clippy-args }} --locked -- -D warnings
 
       # Tests are platform-independent logic: one OS is enough. The app crate
       # has no tests, and building its harness would recompile GPUI for nothing.
       # The cli's integration test speaks the Tuya v3.5 protocol to a fake panel
       # on 127.0.0.1, so it runs anywhere.
       - name: Run the tests, unit and integration (every crate but the app)
-        if: runner.os == 'macOS'
+        if: matrix.run-tests
         run: cargo test --workspace --exclude lscsync-app --locked

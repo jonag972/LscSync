@@ -86,9 +86,15 @@ jobs:
         if: runner.os == 'Linux'
         run: sudo apt-get install -y --no-install-recommends mold
 
+      # mold alone rejects the -m64 cargo passes to a raw linker: go through
+      # the clang driver (installed by tools/linux-deps.sh) with -fuse-ld=mold.
+      # RUSTFLAGS is not set in this workflow, so the target-specific variable
+      # below applies.
       - name: Use mold as the linker (Linux)
         if: runner.os == 'Linux'
-        run: echo "CARGO_TARGET_X86_64_UNKNOWN_LINUX_GNU_LINKER=mold" >> "$GITHUB_ENV"
+        run: |
+          echo "CARGO_TARGET_X86_64_UNKNOWN_LINUX_GNU_LINKER=clang" >> "$GITHUB_ENV"
+          echo "CARGO_TARGET_X86_64_UNKNOWN_LINUX_GNU_RUSTFLAGS=-C link-arg=-fuse-ld=mold" >> "$GITHUB_ENV"
 
       - name: Use lld-link as the linker (Windows)
         if: runner.os == 'Windows'

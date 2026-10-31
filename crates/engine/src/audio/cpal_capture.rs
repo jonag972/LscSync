@@ -8,24 +8,27 @@
 //!
 //! Same API as `MacAudioCapture`.
 
-use std::sync::mpsc::{self, Receiver};
+use std::sync::Arc;
 use std::time::Duration;
 
 use cpal::traits::{DeviceTrait, HostTrait, StreamTrait};
 use cpal::{FromSample, SizedSample};
 
 use super::{AudioError, BlockBuilder};
+use crate::{Closed, Latest};
 
 pub struct CpalCapture {
     stream: Option<cpal::Stream>,
-    receiver: Option<Receiver<Vec<f32>>>,
+    /// Bounded queue of audio blocks: a slow engine drops old blocks instead
+    /// of accumulating them without limit.
+    queue: Option<Arc<Latest<Vec<f32>>>>,
 }
 
 impl CpalCapture {
     pub fn new() -> Result<Self, AudioError> {
         Ok(Self {
             stream: None,
-            receiver: None,
+            queue: None,
         })
     }
 
@@ -52,9 +55,12 @@ impl CpalCapture {
             (device, config)
         };
 
-        let (sender, receiver) = mpsc::channel();
-        let builder =
-            BlockBuilder::new(usize::from(config.channels()), config.sample_rate(), sender);
+        let queue = Latest::new();
+        let builder = BlockBuilder::new(
+            usize::from(config.channels()),
+            config.sample_rate(),
+            queue.sender(),
+        );
         let stream = match config.sample_format() {
             cpal::SampleFormat::F32 => input_stream::<f32>(&device, config.into(), builder),
             cpal::SampleFormat::I16 => input_stream::<i16>(&device, config.into(), builder),
@@ -66,29 +72,25 @@ impl CpalCapture {
         stream.play().map_err(|e| capture_error("start", e))?;
 
         self.stream = Some(stream);
-        self.receiver = Some(receiver);
+        self.queue = Some(queue);
         Ok(())
     }
 
     pub fn stop(&mut self) {
         self.stream = None;
-        self.receiver = None;
+        self.queue = None;
     }
 
     /// `Ok(None)`: no block within `timeout` (Windows sends nothing while the
-    /// output is silent). Only a closed channel is an error.
+    /// output is silent). Only a closed queue is an error.
     pub fn read_block_timeout(&self, timeout: Duration) -> Result<Option<Vec<f32>>, AudioError> {
-        use std::sync::mpsc::RecvTimeoutError;
-        let receiver = self
-            .receiver
+        let queue = self
+            .queue
             .as_ref()
             .ok_or_else(|| AudioError::Capture("audio capture not started".to_owned()))?;
-        match receiver.recv_timeout(timeout) {
-            Ok(block) => Ok(Some(block)),
-            Err(RecvTimeoutError::Timeout) => Ok(None),
-            Err(RecvTimeoutError::Disconnected) => {
-                Err(AudioError::Capture("audio stream interrupted".to_owned()))
-            }
+        match queue.recv_timeout(timeout) {
+            Ok(block) => Ok(block),
+            Err(Closed) => Err(AudioError::Capture("audio stream interrupted".to_owned())),
         }
     }
 }

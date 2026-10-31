@@ -21,6 +21,7 @@ use tokio::task::JoinHandle;
 
 use crate::capture::{CaptureError, ScreenCapture};
 use crate::tuya::{Lsc, LscConfig, LscError};
+use crate::{Latest, LatestSender};
 
 const CONNECT_TIMEOUT: Duration = Duration::from_secs(10);
 
@@ -149,18 +150,22 @@ pub struct EngineHandle {
 }
 
 impl EngineHandle {
-    pub fn start(targets: Vec<Target>, settings: Settings) -> (Self, Receiver<EngineEvent>) {
+    pub fn start(targets: Vec<Target>, settings: Settings) -> (Self, Arc<Latest<EngineEvent>>) {
         Self::start_after(None, targets, settings)
     }
 
     /// Starts an engine once `previous` has finished, without blocking the
     /// caller: the controllers accept only one local connection at a time.
+    ///
+    /// Events go through a bounded queue: the app only ever needs the latest
+    /// ones, so a busy UI can never make them pile up without limit.
     pub fn start_after(
         previous: Option<EngineHandle>,
         targets: Vec<Target>,
         settings: Settings,
-    ) -> (Self, Receiver<EngineEvent>) {
-        let (sender, receiver) = mpsc::channel();
+    ) -> (Self, Arc<Latest<EngineEvent>>) {
+        let events_queue = Latest::new();
+        let events = events_queue.sender();
         let (updates, updates_rx) = mpsc::channel();
         let stop = Arc::new(AtomicBool::new(false));
         let stop_thread = Arc::clone(&stop);
@@ -168,22 +173,22 @@ impl EngineHandle {
         let join = std::thread::spawn(move || {
             drop(previous);
             if stop_thread.load(Ordering::Relaxed) {
-                let _ = sender.send(EngineEvent::Stopped);
+                events.send(EngineEvent::Stopped);
                 return;
             }
             let result =
-                Engine::new(targets, settings, Some(sender.clone())).and_then(|mut engine| {
-                    let result = engine.run_until(&stop_thread, &sender, &updates_rx);
+                Engine::new(targets, settings, Some(events.clone())).and_then(|mut engine| {
+                    let result = engine.run_until(&stop_thread, &events, &updates_rx);
                     engine.close();
                     result
                 });
             if let Err(error) = result {
-                let _ = sender.send(EngineEvent::Error {
+                events.send(EngineEvent::Error {
                     kind: error.kind(),
                     message: error.to_string(),
                 });
             }
-            let _ = sender.send(EngineEvent::Stopped);
+            events.send(EngineEvent::Stopped);
         });
 
         (
@@ -192,7 +197,7 @@ impl EngineHandle {
                 updates,
                 join: Some(join),
             },
-            receiver,
+            events_queue,
         )
     }
 
@@ -276,7 +281,7 @@ impl Engine {
     pub fn new(
         targets: Vec<Target>,
         settings: Settings,
-        events: Option<Sender<EngineEvent>>,
+        events: Option<LatestSender<EngineEvent>>,
     ) -> Result<Self, EngineError> {
         let targets: Vec<Target> = targets
             .into_iter()
@@ -330,7 +335,7 @@ impl Engine {
                 Err(error) => {
                     tracing::warn!("{}: {error}", target.name);
                     if let Some(events) = &events {
-                        let _ = events.send(EngineEvent::DeviceUnreachable(target.name.clone()));
+                        events.send(EngineEvent::DeviceUnreachable(target.name.clone()));
                     }
                     first_error.get_or_insert(error);
                 }
@@ -390,7 +395,7 @@ impl Engine {
         runtime: &tokio::runtime::Runtime,
         target: Target,
         lsc: Lsc,
-        events: Option<Sender<EngineEvent>>,
+        events: Option<LatestSender<EngineEvent>>,
     ) -> Link {
         let (frames, receiver) = watch::channel(None);
         // Logs the connection going down and coming back.
@@ -425,7 +430,7 @@ impl Engine {
     pub fn run_until(
         &mut self,
         stop: &AtomicBool,
-        events: &Sender<EngineEvent>,
+        events: &LatestSender<EngineEvent>,
         updates: &Receiver<Update>,
     ) -> Result<(), EngineError> {
         let mut stats = Stats::new();
@@ -437,7 +442,7 @@ impl Engine {
             let snapshot = self.tick().inspect_err(|error| {
                 tracing::error!("sync stopped: {error}");
             })?;
-            let _ = events.send(EngineEvent::Snapshot(snapshot));
+            events.send(EngineEvent::Snapshot(snapshot));
             stats.frame(frame_start.elapsed());
 
             // Screen modes: fixed period. Music mode: reading the audio block
@@ -620,10 +625,19 @@ impl Engine {
             .audio
             .as_ref()
             .ok_or_else(|| EngineError::Audio("audio capture not started".to_owned()))?;
-        let samples = audio
+        let mut samples = audio
             .read_block_timeout(Duration::from_millis(100))
             .map_err(|e| EngineError::Audio(e.to_string()))?
             .unwrap_or_else(|| vec![0.0; crate::audio::BLOCK_SIZE]);
+        // Keep only the most recent block: the queue is already bounded, but
+        // draining it here keeps the lights in step with the sound even after
+        // a slow frame.
+        while let Some(newer) = audio
+            .read_block_timeout(Duration::ZERO)
+            .map_err(|e| EngineError::Audio(e.to_string()))?
+        {
+            samples = newer;
+        }
 
         let hue = match self.settings.audio_hue {
             AudioHue::Cycle => self.bass.cycling_hue(),
@@ -830,11 +844,11 @@ async fn drive(
     command: ColorCommand,
     name: String,
     mut frames: watch::Receiver<Option<Frame>>,
-    events: Option<Sender<EngineEvent>>,
+    events: Option<LatestSender<EngineEvent>>,
 ) -> Lsc {
     let report = |event: EngineEvent| {
         if let Some(events) = &events {
-            let _ = events.send(event);
+            events.send(event);
         }
     };
     // What the device shows, as far as we know.

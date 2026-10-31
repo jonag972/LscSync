@@ -4,7 +4,7 @@
 
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::mpsc::{self, Receiver};
+use std::sync::mpsc;
 use std::thread::JoinHandle;
 use std::time::Duration;
 
@@ -13,6 +13,7 @@ use libpulse_binding::stream::Direction;
 use libpulse_simple_binding::Simple;
 
 use super::{AudioError, BLOCK_SIZE, BlockBuilder, SAMPLE_RATE};
+use crate::{Closed, Latest};
 
 /// The monitor of whatever output is currently the default.
 const DEFAULT_MONITOR: &str = "@DEFAULT_MONITOR@";
@@ -21,7 +22,9 @@ const CHANNELS: u8 = 2;
 pub struct LinuxAudioCapture {
     stop: Arc<AtomicBool>,
     thread: Option<JoinHandle<()>>,
-    receiver: Option<Receiver<Vec<f32>>>,
+    /// Bounded queue of audio blocks: a slow engine drops old blocks instead
+    /// of accumulating them without limit.
+    queue: Option<Arc<Latest<Vec<f32>>>>,
 }
 
 impl LinuxAudioCapture {
@@ -29,7 +32,7 @@ impl LinuxAudioCapture {
         Ok(Self {
             stop: Arc::new(AtomicBool::new(false)),
             thread: None,
-            receiver: None,
+            queue: None,
         })
     }
 
@@ -37,10 +40,11 @@ impl LinuxAudioCapture {
         if self.thread.is_some() {
             return Ok(());
         }
-        let (sender, receiver) = mpsc::channel();
+        let queue = Latest::new();
         let (ready, ready_rx) = mpsc::sync_channel(1);
         self.stop.store(false, Ordering::Relaxed);
         let stop = Arc::clone(&self.stop);
+        let thread_queue = Arc::clone(&queue);
 
         // The PulseAudio connection lives on its own thread: reads block.
         let thread = std::thread::spawn(move || {
@@ -71,7 +75,11 @@ impl LinuxAudioCapture {
                 }
             };
 
-            let mut builder = BlockBuilder::new(usize::from(CHANNELS), SAMPLE_RATE as u32, sender);
+            let mut builder = BlockBuilder::new(
+                usize::from(CHANNELS),
+                SAMPLE_RATE as u32,
+                thread_queue.sender(),
+            );
             let mut bytes = vec![0_u8; BLOCK_SIZE * usize::from(CHANNELS) * 4];
             let mut samples = Vec::with_capacity(BLOCK_SIZE * usize::from(CHANNELS));
             while !stop.load(Ordering::Relaxed) {
@@ -97,7 +105,7 @@ impl LinuxAudioCapture {
             }
         }
         self.thread = Some(thread);
-        self.receiver = Some(receiver);
+        self.queue = Some(queue);
         Ok(())
     }
 
@@ -106,22 +114,18 @@ impl LinuxAudioCapture {
         if let Some(thread) = self.thread.take() {
             let _ = thread.join();
         }
-        self.receiver = None;
+        self.queue = None;
     }
 
-    /// `Ok(None)`: no block within `timeout`. Only a closed channel is an error.
+    /// `Ok(None)`: no block within `timeout`. Only a closed queue is an error.
     pub fn read_block_timeout(&self, timeout: Duration) -> Result<Option<Vec<f32>>, AudioError> {
-        use std::sync::mpsc::RecvTimeoutError;
-        let receiver = self
-            .receiver
+        let queue = self
+            .queue
             .as_ref()
             .ok_or_else(|| AudioError::Capture("audio capture not started".to_owned()))?;
-        match receiver.recv_timeout(timeout) {
-            Ok(block) => Ok(Some(block)),
-            Err(RecvTimeoutError::Timeout) => Ok(None),
-            Err(RecvTimeoutError::Disconnected) => {
-                Err(AudioError::Capture("audio stream interrupted".to_owned()))
-            }
+        match queue.recv_timeout(timeout) {
+            Ok(block) => Ok(block),
+            Err(Closed) => Err(AudioError::Capture("audio stream interrupted".to_owned())),
         }
     }
 }

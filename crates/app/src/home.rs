@@ -346,7 +346,8 @@ impl Root {
     }
 
     /// Moves the background tint toward the lights' average color while the
-    /// sync runs, back to plain when it stops. True when it changed.
+    /// sync runs, back to plain when it stops. True only when it actually
+    /// moved, so the window is not redrawn 25 times a second for nothing.
     pub(crate) fn update_tint(&mut self) -> bool {
         let target = self
             .snapshot
@@ -364,9 +365,8 @@ impl Root {
                 })
             });
         let level_target = if target.is_some() { 1.0 } else { 0.0 };
-        if (self.tint_level - level_target).abs() < 0.005 && target.is_none() {
-            return false;
-        }
+        let old_level = self.tint_level;
+        let old_tint = self.tint;
         self.tint_level += (level_target - self.tint_level) * TINT_EASING;
         if let Some(target) = target {
             let current = self.tint.unwrap_or(target);
@@ -376,7 +376,18 @@ impl Root {
                 current.b + (target.b - current.b) * TINT_EASING,
             ));
         }
-        true
+        // Fully faded out: back to the plain background.
+        if level_target == 0.0 && self.tint_level < 0.005 {
+            self.tint_level = 0.0;
+            self.tint = None;
+        }
+        let level_changed = (self.tint_level - old_level).abs() > 0.0005;
+        let tint_changed = match (old_tint, self.tint) {
+            (Some(a), Some(b)) => (a.r - b.r).abs() + (a.g - b.g).abs() + (a.b - b.b).abs() > 0.001,
+            (None, Some(_)) => true,
+            _ => false,
+        };
+        level_changed || tint_changed
     }
 
     /// The window background: plain, or tinted by the lights.

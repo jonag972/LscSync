@@ -5,8 +5,7 @@
 #![cfg_attr(all(windows, not(debug_assertions)), windows_subsystem = "windows")]
 
 use std::borrow::Cow;
-use std::sync::LazyLock;
-use std::sync::mpsc::{self, Receiver};
+use std::sync::{Arc, LazyLock, mpsc};
 use std::time::Duration;
 
 use gpui_kit::component::slider::{SliderEvent, SliderState};
@@ -14,6 +13,7 @@ use gpui_kit::component::{Theme, ThemeMode};
 use gpui_kit::*;
 use gpui_tray::{Icon, Tray};
 use lscsync_core::{Hsv, Mode, Preferences, Profile, Snapshot};
+use lscsync_engine::Latest;
 use lscsync_engine::worker::{EngineEvent, EngineHandle, ErrorKind, Target};
 use lscsync_platform::{legacy_settings_path, log_dir, preferences_path, profile_path};
 use rust_i18n::t;
@@ -140,7 +140,8 @@ struct Root {
     engine: Option<EngineHandle>,
     /// Stopped engine whose thread finishes in the background (back to white).
     retiring: Option<EngineHandle>,
-    events: Option<Receiver<EngineEvent>>,
+    /// Bounded queue of engine events; only the latest ones matter.
+    events: Option<Arc<Latest<EngineEvent>>>,
     snapshot: Option<Snapshot>,
     /// Last engine error, kept until the next start.
     error: Option<(ErrorKind, String)>,
@@ -248,23 +249,37 @@ impl Root {
     }
 
     fn drain_events(&mut self) -> bool {
-        let Some(receiver) = &self.events else {
+        // Clone the Arc so the queue can be released (`Stopped`) mid-loop.
+        let Some(queue) = self.events.clone() else {
             return false;
         };
         let mut changed = false;
-        while let Ok(event) = receiver.try_recv() {
-            changed = true;
+        // Stops on an empty queue, or once every producer is gone.
+        while let Ok(Some(event)) = queue.recv_timeout(Duration::ZERO) {
             match event {
-                EngineEvent::Snapshot(snapshot) => self.snapshot = Some(snapshot),
+                EngineEvent::Snapshot(snapshot) => {
+                    // Identical snapshots need no redraw.
+                    if self.snapshot.as_ref() != Some(&snapshot) {
+                        self.snapshot = Some(snapshot);
+                        changed = true;
+                    }
+                }
                 EngineEvent::DeviceUnreachable(name) => {
                     if !self.unreachable.contains(&name) {
                         self.unreachable.push(name);
+                        changed = true;
                     }
                 }
-                EngineEvent::DeviceBack(name) => self.unreachable.retain(|n| *n != name),
+                EngineEvent::DeviceBack(name) => {
+                    if self.unreachable.contains(&name) {
+                        self.unreachable.retain(|n| *n != name);
+                        changed = true;
+                    }
+                }
                 EngineEvent::Error { kind, message } => {
                     tracing::error!("engine stopped: {message}");
                     self.error = Some((kind, message));
+                    changed = true;
                 }
                 EngineEvent::Stopped => {
                     // The engine thread is done: release the handle, otherwise
@@ -272,6 +287,7 @@ impl Root {
                     self.engine = None;
                     self.events = None;
                     self.snapshot = None;
+                    changed = true;
                     break;
                 }
             }

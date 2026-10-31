@@ -110,14 +110,15 @@ pub(crate) struct BlockBuilder {
     /// Position of the next output sample, relative to the current frame.
     next: f64,
     block: Vec<f32>,
-    sender: std::sync::mpsc::Sender<Vec<f32>>,
+    /// Bounded queue: a slow engine never makes it grow without limit.
+    sender: crate::LatestSender<Vec<f32>>,
 }
 
 impl BlockBuilder {
     pub(crate) fn new(
         channels: usize,
         sample_rate: u32,
-        sender: std::sync::mpsc::Sender<Vec<f32>>,
+        sender: crate::LatestSender<Vec<f32>>,
     ) -> Self {
         Self {
             channels: channels.max(1),
@@ -136,7 +137,7 @@ impl BlockBuilder {
                 self.block.push(mono);
                 if self.block.len() == BLOCK_SIZE {
                     let block = std::mem::replace(&mut self.block, Vec::with_capacity(BLOCK_SIZE));
-                    let _ = self.sender.send(block);
+                    self.sender.send(block);
                 }
                 self.next += self.step;
             }
@@ -158,15 +159,23 @@ mod tests {
     use super::*;
 
     fn blocks_for(sample_rate: u32, channels: usize, seconds: usize) -> Vec<Vec<f32>> {
-        let (sender, receiver) = std::sync::mpsc::channel();
-        let mut builder = BlockBuilder::new(channels, sample_rate, sender);
+        let queue = crate::Latest::new();
+        let mut builder = BlockBuilder::new(channels, sample_rate, queue.sender());
         // Uneven buffer sizes, like real audio callbacks.
         let samples = vec![0.5_f32; sample_rate as usize * channels * seconds];
+        let mut blocks = Vec::new();
+        // Drain as we go: the queue is bounded on purpose.
         for chunk in samples.chunks(441 * channels) {
             builder.push(chunk);
+            while let Ok(Some(block)) = queue.recv_timeout(std::time::Duration::ZERO) {
+                blocks.push(block);
+            }
         }
         drop(builder);
-        receiver.iter().collect()
+        while let Ok(Some(block)) = queue.recv_timeout(std::time::Duration::ZERO) {
+            blocks.push(block);
+        }
+        blocks
     }
 
     #[test]
@@ -189,11 +198,14 @@ mod tests {
 
     #[test]
     fn channels_are_mixed_to_mono() {
-        let (sender, receiver) = std::sync::mpsc::channel();
-        let mut builder = BlockBuilder::new(2, 48_000, sender);
+        let queue = crate::Latest::new();
+        let mut builder = BlockBuilder::new(2, 48_000, queue.sender());
         let stereo: Vec<f32> = (0..BLOCK_SIZE).flat_map(|_| [1.0, 0.0]).collect();
         builder.push(&stereo);
-        let block = receiver.try_recv().expect("one block");
+        let block = queue
+            .recv_timeout(std::time::Duration::from_millis(100))
+            .expect("channel open")
+            .expect("one block");
         assert!(block.iter().all(|&sample| (sample - 0.5).abs() < 1e-6));
     }
 }

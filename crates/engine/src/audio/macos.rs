@@ -6,7 +6,7 @@
 
 use std::ffi::c_void;
 use std::ptr::NonNull;
-use std::sync::mpsc::{self, Receiver, Sender};
+use std::sync::{Arc, Mutex, mpsc};
 use std::time::Duration;
 
 use block2::RcBlock;
@@ -22,14 +22,23 @@ use objc2_screen_capture_kit::{
 };
 
 use super::AudioError;
+use crate::{Closed, Latest, LatestSender};
 
 // ---------------------------------------------------------------------------
 // ObjC handler receiving the audio buffers
 // ---------------------------------------------------------------------------
 
+/// State of the stream output handler: the bounded queue towards the engine,
+/// plus a scratch buffer reused for the PCM copy so the real-time callback
+/// does not allocate one `Vec` per sample buffer.
+pub struct AudioOutputIvars {
+    sender: LatestSender<Vec<f32>>,
+    scratch: Mutex<Vec<u8>>,
+}
+
 define_class!(
     #[unsafe(super(NSObject))]
-    #[ivars = Sender<Vec<f32>>]
+    #[ivars = AudioOutputIvars]
     pub struct AudioOutputHandler;
 
     unsafe impl NSObjectProtocol for AudioOutputHandler {}
@@ -43,9 +52,14 @@ define_class!(
             output_type: SCStreamOutputType,
         ) {
             if output_type == SCStreamOutputType::Audio {
-                let samples = unsafe { extract_mono(sample_buffer) };
+                let ivars = self.ivars();
+                let samples = {
+                    let mut scratch = ivars.scratch.lock().unwrap();
+                    unsafe { extract_mono(sample_buffer, &mut scratch) }
+                };
                 if !samples.is_empty() {
-                    let _ = self.ivars().send(samples);
+                    // Never blocks; drops the oldest block if the engine lags.
+                    ivars.sender.send(samples);
                 }
             }
         }
@@ -64,7 +78,9 @@ impl AudioOutputHandler {
 // PCM extraction from CMSampleBuffer
 // ---------------------------------------------------------------------------
 
-unsafe fn extract_mono(sample_buffer: &CMSampleBuffer) -> Vec<f32> {
+/// Copies the sample buffer's PCM into `scratch` (reused between calls) and
+/// mixes the stereo pairs down to mono.
+unsafe fn extract_mono(sample_buffer: &CMSampleBuffer, scratch: &mut Vec<u8>) -> Vec<f32> {
     let block_buffer = unsafe { sample_buffer.data_buffer() };
     let Some(block_buffer) = block_buffer else {
         return Vec::new();
@@ -75,14 +91,15 @@ unsafe fn extract_mono(sample_buffer: &CMSampleBuffer) -> Vec<f32> {
         return Vec::new();
     }
 
-    let mut bytes = vec![0u8; length];
-    let dest = NonNull::<c_void>::new(bytes.as_mut_ptr().cast()).expect("non-null pointer");
+    scratch.clear();
+    scratch.resize(length, 0);
+    let dest = NonNull::<c_void>::new(scratch.as_mut_ptr().cast()).expect("non-null pointer");
     let status = unsafe { block_buffer.copy_data_bytes(0, length, dest) };
     if status != 0 {
         return Vec::new();
     }
 
-    let (chunks, _) = bytes.as_chunks::<8>();
+    let (chunks, _) = scratch.as_chunks::<8>();
     chunks
         .iter()
         .map(|chunk| {
@@ -110,9 +127,11 @@ pub fn system_audio_available() -> bool {
 pub struct MacAudioCapture {
     stream: Option<Retained<SCStream>>,
     /// SCStream only keeps a weak reference to its outputs: without this handle
-    /// the handler (and the channel sender) would be freed right away.
+    /// the handler (and the queue sender) would be freed right away.
     handler: Option<Retained<ProtocolObject<dyn SCStreamOutput>>>,
-    receiver: Option<Receiver<Vec<f32>>>,
+    /// Bounded queue of audio blocks: a slow engine drops old blocks instead
+    /// of accumulating them without limit.
+    queue: Option<Arc<Latest<Vec<f32>>>>,
 }
 
 impl MacAudioCapture {
@@ -120,7 +139,7 @@ impl MacAudioCapture {
         Ok(Self {
             stream: None,
             handler: None,
-            receiver: None,
+            queue: None,
         })
     }
 
@@ -157,10 +176,13 @@ impl MacAudioCapture {
             config.setChannelCount(2);
         }
 
-        // 4. Handler + channel.
-        let (sender, receiver) = mpsc::channel();
+        // 4. Handler + bounded queue towards the engine.
+        let queue = Latest::new();
         let handler: Retained<AudioOutputHandler> = {
-            let allocated = unsafe { AudioOutputHandler::alloc() }.set_ivars(sender);
+            let allocated = unsafe { AudioOutputHandler::alloc() }.set_ivars(AudioOutputIvars {
+                sender: queue.sender(),
+                scratch: Mutex::new(Vec::new()),
+            });
             unsafe { msg_send![super(allocated), init] }
         };
 
@@ -207,7 +229,7 @@ impl MacAudioCapture {
 
         self.stream = Some(stream);
         self.handler = Some(proto);
-        self.receiver = Some(receiver);
+        self.queue = Some(queue);
         Ok(())
     }
 
@@ -223,23 +245,19 @@ impl MacAudioCapture {
             }
         }
         self.handler = None;
-        self.receiver = None;
+        self.queue = None;
     }
 
     /// `Ok(None)`: no block within `timeout`. Not a failure: the caller feeds
-    /// silence instead. Only a closed channel is an error.
+    /// silence instead. Only a closed queue is an error.
     pub fn read_block_timeout(&self, timeout: Duration) -> Result<Option<Vec<f32>>, AudioError> {
-        use std::sync::mpsc::RecvTimeoutError;
-        let receiver = self
-            .receiver
+        let queue = self
+            .queue
             .as_ref()
             .ok_or_else(|| AudioError::Capture("audio capture not started".to_owned()))?;
-        match receiver.recv_timeout(timeout) {
-            Ok(block) => Ok(Some(block)),
-            Err(RecvTimeoutError::Timeout) => Ok(None),
-            Err(RecvTimeoutError::Disconnected) => {
-                Err(AudioError::Capture("audio stream interrupted".to_owned()))
-            }
+        match queue.recv_timeout(timeout) {
+            Ok(block) => Ok(block),
+            Err(Closed) => Err(AudioError::Capture("audio stream interrupted".to_owned())),
         }
     }
 

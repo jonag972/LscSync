@@ -113,7 +113,13 @@ impl Knob {
             Self::Contrast => settings.contrast = value / 100.0,
             Self::FrameRate => settings.frame_rate = value.round() as u8,
             Self::HueSpeed => settings.hue_speed = value.round() as u16,
-            Self::Hue => settings.fixed_hue = value.round() as u16,
+            // Moving the hue after the white swatch brings the color back.
+            Self::Hue => {
+                if (value - self.get(settings)).abs() >= 1.0 {
+                    settings.fixed_hue = value.round() as u16;
+                    settings.fixed_saturation = 1.0;
+                }
+            }
             // Every slider is read on each move: the automatic delay only
             // becomes a chosen one when this slider moved.
             Self::MusicDelay => {

@@ -1,5 +1,6 @@
-//! Bass detection by FFT: the peak of the 20-250 Hz band becomes the
-//! brightness, while the hue cycles or stays fixed.
+//! Bass detection by FFT: the peak of the bass band (20-250 Hz by default)
+//! becomes the brightness, while the hue cycles or stays fixed. The overall
+//! volume (RMS) is measured too, for the panel meter.
 //!
 //! Fast attack / 8× slower release, a reference peak that decays over 1-2 s,
 //! and an adjustable brightness floor.
@@ -9,14 +10,17 @@ use std::sync::Arc;
 use std::time::Instant;
 
 use lscsync_core::Hsv;
-use lscsync_core::protocol::NB_ZONES;
 use realfft::RealFftPlanner;
 use realfft::num_complex::Complex32;
 
 use super::{BLOCK_SIZE, SAMPLE_RATE};
 
-/// Frequency range treated as "the bass".
-const BASS_RANGE_HZ: (f32, f32) = (20.0, 250.0);
+/// Lowest frequency the bass range can start at.
+const BASS_MIN_HZ: f32 = 10.0;
+
+/// RMS under which the sound counts as silence for the meter (about
+/// -50 dBFS): background noise must not light a panel.
+const VOLUME_FLOOR: f32 = 0.003;
 
 /// Decay of the reference peak (~1-2 s to fall back to silence).
 const PEAK_DECAY: f32 = 0.99;
@@ -39,6 +43,10 @@ pub struct BassProcessor {
     peak: f32,
     /// Smoothed brightness (fast attack, slow release).
     smoothed: f32,
+    /// Reference peak of the volume (RMS), decaying like `peak`.
+    volume_peak: f32,
+    /// Smoothed volume, 0.0 to 1.0 (fast attack, slow release).
+    volume: f32,
     /// Bin range (lo, hi) of each equalizer band.
     band_bins: Vec<(usize, usize)>,
     /// Latest level of each equalizer band (0.0 to 1.0).
@@ -52,6 +60,8 @@ pub struct BassProcessor {
     pub min_brightness: f32,
     pub max_brightness: f32,
     pub hue_speed: f32,
+    /// Frequency range treated as the bass, in Hz.
+    pub bass_range: (f32, f32),
 }
 
 impl BassProcessor {
@@ -92,6 +102,8 @@ impl BassProcessor {
             window,
             peak: 1e-6,
             smoothed: 0.0,
+            volume_peak: VOLUME_FLOOR,
+            volume: 0.0,
             band_bins,
             bands: vec![0.0; EQ_BANDS],
             bands_peak: 1e-6,
@@ -100,6 +112,7 @@ impl BassProcessor {
             min_brightness: 0.02,
             max_brightness: 100.0,
             hue_speed: 25.0,
+            bass_range: (20.0, 250.0),
         }
     }
 
@@ -120,11 +133,17 @@ impl BassProcessor {
             .process(&mut self.input, &mut self.spectrum)
             .expect("FFT");
 
-        // Frequency of each spectrum bin.
+        // Frequency of each spectrum bin. The range is put back in order and
+        // always keeps at least one bin, whatever the settings say.
         let bin_width = SAMPLE_RATE / BLOCK_SIZE as f32;
-        let (bass_lo, bass_hi) = BASS_RANGE_HZ;
-        let lo_bin = (bass_lo / bin_width).ceil() as usize;
-        let hi_bin = ((bass_hi / bin_width).ceil() as usize).min(self.spectrum.len());
+        let nyquist = SAMPLE_RATE / 2.0;
+        let (low, high) = self.bass_range;
+        let bass_lo = low.min(high).clamp(BASS_MIN_HZ, nyquist);
+        let bass_hi = low.max(high).clamp(bass_lo, nyquist);
+        let lo_bin = ((bass_lo / bin_width).ceil() as usize).min(self.spectrum.len() - 1);
+        let hi_bin = ((bass_hi / bin_width).ceil() as usize)
+            .max(lo_bin + 1)
+            .min(self.spectrum.len());
 
         // Maximum amplitude in the bass range (the peak, not the mean: kicks
         // stand out better).
@@ -162,36 +181,53 @@ impl BassProcessor {
         &self.bands
     }
 
-    /// Processes a block of samples and returns the colors for the panels.
+    /// Overall volume of a block (RMS), normalized by a decaying reference
+    /// peak: 0.0 to 1.0, 0.0 under the silence floor.
+    fn volume_level(&mut self, samples: &[f32]) -> f32 {
+        if samples.is_empty() {
+            return 0.0;
+        }
+        let rms = (samples.iter().map(|s| s * s).sum::<f32>() / samples.len() as f32).sqrt();
+        self.volume_peak = (self.volume_peak * PEAK_DECAY).max(rms).max(VOLUME_FLOOR);
+        if rms < VOLUME_FLOOR {
+            0.0
+        } else {
+            (rms / self.volume_peak).min(1.0)
+        }
+    }
+
+    /// Fast attack, 8× slower release (fixed 1:8 ratio).
+    fn follow(&self, current: f32, target: f32) -> f32 {
+        let alpha = if target > current {
+            self.reactivity
+        } else {
+            self.reactivity / 8.0
+        };
+        current * (1.0 - alpha) + target * alpha
+    }
+
+    /// Processes a block of samples and returns the color every panel
+    /// pulses with. The volume for [`Self::volume`] is updated too.
     ///
     /// `hue`: the hue to apply (computed by the caller from the cycling or
     /// fixed setting).
-    /// `offset_zones`: if true, shifts the hue by 1/3 on each zone.
-    pub fn process(&mut self, samples: &[f32], hue: f32, offset_zones: bool) -> [Hsv; 3] {
+    pub fn process(&mut self, samples: &[f32], hue: f32) -> Hsv {
         let level = self.bass_level(samples);
+        let volume = self.volume_level(samples);
+        self.volume = self.follow(self.volume, volume);
 
         // Target brightness: floor + (1 - floor) × level.
         let target = self.min_brightness + (1.0 - self.min_brightness) * level;
-
-        // Fast attack, 8× slower release (fixed 1:8 ratio).
-        let alpha_up = self.reactivity;
-        let alpha_down = alpha_up / 8.0;
-        let alpha = if target > self.smoothed {
-            alpha_up
-        } else {
-            alpha_down
-        };
-        self.smoothed = self.smoothed * (1.0 - alpha) + target * alpha;
+        self.smoothed = self.follow(self.smoothed, target);
 
         // Global dimmer.
         let value = (self.smoothed * self.max_brightness / 100.0).min(1.0);
+        Hsv::new(hue, 1.0, value)
+    }
 
-        // Hue: the same everywhere, or shifted by 1/3 per zone.
-        if offset_zones {
-            core::array::from_fn(|i| Hsv::new((hue + i as f32 / NB_ZONES as f32) % 1.0, 1.0, value))
-        } else {
-            [Hsv::new(hue, 1.0, value); NB_ZONES]
-        }
+    /// Smoothed overall volume, 0.0 to 1.0: how full the panel meter is.
+    pub fn volume(&self) -> f32 {
+        self.volume
     }
 
     /// Cycling hue: a full turn every `hue_speed` seconds.
@@ -220,11 +256,12 @@ mod tests {
         let silence = vec![0.0; BLOCK_SIZE];
         for _ in 0..50 {
             // Run several frames so the smoothing converges.
-            let _ = processor.process(&silence, 0.5, false);
+            let _ = processor.process(&silence, 0.5);
         }
-        let zones = processor.process(&silence, 0.5, false);
+        let color = processor.process(&silence, 0.5);
         // Once converged, brightness sits at the floor.
-        assert!(zones[0].v < 0.1, "brightness = {}", zones[0].v);
+        assert!(color.v < 0.1, "brightness = {}", color.v);
+        assert_eq!(processor.volume(), 0.0);
     }
 
     #[test]
@@ -242,9 +279,9 @@ mod tests {
             })
             .collect();
 
-        let zones = processor.process(&bass_wave, 0.5, false);
-        assert!(zones[0].v > 0.5, "brightness = {}", zones[0].v);
-        assert_eq!(zones[0].h, 0.5);
+        let color = processor.process(&bass_wave, 0.5);
+        assert!(color.v > 0.5, "brightness = {}", color.v);
+        assert_eq!(color.h, 0.5);
     }
 
     #[test]
@@ -261,7 +298,7 @@ mod tests {
             })
             .collect();
         for _ in 0..50 {
-            let _ = processor.process(&wave, 0.5, false);
+            let _ = processor.process(&wave, 0.5);
         }
         let bands = processor.bands();
         let loudest = bands
@@ -277,18 +314,52 @@ mod tests {
         // Silence: every band falls back to zero.
         let silence = vec![0.0; BLOCK_SIZE];
         for _ in 0..500 {
-            let _ = processor.process(&silence, 0.5, false);
+            let _ = processor.process(&silence, 0.5);
         }
         assert!(processor.bands().iter().all(|&b| b < 0.01));
     }
 
+    fn sine(hz: f32, amplitude: f32) -> Vec<f32> {
+        (0..BLOCK_SIZE)
+            .map(|i| (2.0 * PI * hz * i as f32 / SAMPLE_RATE).sin() * amplitude)
+            .collect()
+    }
+
     #[test]
-    fn offset_zones() {
+    fn the_bass_range_is_adjustable() {
+        let wave = sine(100.0, 0.8);
+        let mut inside = BassProcessor::new();
+        let mut outside = BassProcessor::new();
+        outside.bass_range = (300.0, 500.0);
+        // A 400 Hz tone sets the reference peak of the 300-500 Hz range.
+        let _ = outside.bass_level(&sine(400.0, 0.8));
+        assert!(inside.bass_level(&wave) > 0.9);
+        let level = outside.bass_level(&wave);
+        assert!(level < 0.1, "outside the range: {level}");
+    }
+
+    #[test]
+    fn a_reversed_bass_range_is_put_back_in_order() {
         let mut processor = BassProcessor::new();
-        let silence = vec![0.0; BLOCK_SIZE];
-        let zones = processor.process(&silence, 0.0, true);
-        // Hues shifted by 1/3.
-        assert!((zones[1].h - 1.0 / 3.0).abs() < 0.01);
-        assert!((zones[2].h - 2.0 / 3.0).abs() < 0.01);
+        processor.bass_range = (500.0, 300.0);
+        let _ = processor.bass_level(&sine(400.0, 0.8));
+        assert!(processor.bass_level(&sine(400.0, 0.8)) > 0.9);
+    }
+
+    #[test]
+    fn volume_follows_the_sound_not_only_the_bass() {
+        let mut processor = BassProcessor::new();
+        processor.reactivity = 0.9;
+        // A voice-like 1 kHz tone, far above the bass.
+        for _ in 0..10 {
+            let _ = processor.process(&sine(1000.0, 0.5), 0.5);
+        }
+        assert!(processor.volume() > 0.8, "loud: {}", processor.volume());
+        // Quieter: the meter drops, without reaching zero.
+        for _ in 0..30 {
+            let _ = processor.process(&sine(1000.0, 0.1), 0.5);
+        }
+        let quiet = processor.volume();
+        assert!(quiet > 0.0 && quiet < 0.8, "quiet: {quiet}");
     }
 }

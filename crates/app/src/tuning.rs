@@ -4,7 +4,7 @@
 use gpui_kit::component::slider::{Slider, SliderState, SliderValue};
 use gpui_kit::prelude::FluentBuilder as _;
 use gpui_kit::*;
-use lscsync_core::{AudioHue, DarkScenes, Hsv, Mode, Settings};
+use lscsync_core::{AudioHue, DarkScenes, Hsv, Mode, MusicStyle, Settings};
 use rust_i18n::t;
 
 use crate::theme::*;
@@ -37,10 +37,13 @@ pub enum Knob {
     Hue,
     /// Music mode: how long the lights wait for the sound (Bluetooth).
     MusicDelay,
+    /// Music mode: where the bass starts and ends, in Hz.
+    BassLow,
+    BassHigh,
 }
 
 impl Knob {
-    pub const ALL: [Self; 13] = [
+    pub const ALL: [Self; 15] = [
         Self::Brightness,
         Self::Saturation,
         Self::Smoothing,
@@ -54,6 +57,8 @@ impl Knob {
         Self::HueSpeed,
         Self::Hue,
         Self::MusicDelay,
+        Self::BassLow,
+        Self::BassHigh,
     ];
 
     /// Minimum, maximum and step, in slider units.
@@ -71,6 +76,7 @@ impl Knob {
             Self::HueSpeed => (5.0, 120.0, 5.0),
             Self::Hue => (0.0, 359.0, 1.0),
             Self::MusicDelay => (0.0, 500.0, 10.0),
+            Self::BassLow | Self::BassHigh => (20.0, 500.0, 5.0),
         }
     }
 
@@ -89,6 +95,8 @@ impl Knob {
             Self::HueSpeed => settings.hue_speed as f32,
             Self::Hue => settings.fixed_hue as f32,
             Self::MusicDelay => settings.music_delay.unwrap_or(*AUTOMATIC_MUSIC_DELAY) as f32,
+            Self::BassLow => settings.music_bass_min_hz as f32,
+            Self::BassHigh => settings.music_bass_max_hz as f32,
         }
     }
 
@@ -113,6 +121,8 @@ impl Knob {
                     settings.music_delay = Some(value.round() as u16);
                 }
             }
+            Self::BassLow => settings.music_bass_min_hz = value.round() as u16,
+            Self::BassHigh => settings.music_bass_max_hz = value.round() as u16,
         }
     }
 
@@ -130,6 +140,8 @@ impl Knob {
             Self::HueSpeed => t!("tuning.hue_speed"),
             Self::Hue => t!("tuning.hue"),
             Self::MusicDelay => t!("tuning.music_delay"),
+            Self::BassLow => t!("tuning.bass_low"),
+            Self::BassHigh => t!("tuning.bass_high"),
         }
         .to_string()
     }
@@ -153,6 +165,7 @@ impl Knob {
             Self::Hue => format!("{}°", value.round() as u32),
             Self::HueSpeed => format!("{} s", value.round() as u32),
             Self::MusicDelay => format!("{} ms", value.round() as u32),
+            Self::BassLow | Self::BassHigh => format!("{} Hz", value.round() as u32),
             _ => format!("{}%", value.round() as u32),
         }
     }
@@ -272,12 +285,22 @@ impl Root {
             Mode::ScreenZones | Mode::Screen => {
                 &[Knob::Brightness, Knob::Saturation, Knob::Smoothing]
             }
+            Mode::Audio if settings.music_style == MusicStyle::Pulse => &[
+                Knob::Brightness,
+                Knob::Reactivity,
+                Knob::BassLow,
+                Knob::BassHigh,
+            ],
             Mode::Audio => &[Knob::Brightness, Knob::Reactivity],
             Mode::Fixed => &[Knob::Hue, Knob::Brightness],
         };
         let mut rows = div().flex().flex_col().gap(px(4.0));
         match mode {
-            Mode::Audio => rows = rows.child(self.render_music_swatches(cx)),
+            Mode::Audio => {
+                rows = rows
+                    .child(self.render_music_swatches(cx))
+                    .child(self.render_music_style(cx))
+            }
             Mode::Fixed => rows = rows.child(self.render_color_swatches(cx)),
             _ => {}
         }
@@ -384,16 +407,6 @@ impl Root {
                 ),
             );
         }
-        if mode == Mode::Audio {
-            rows = rows.child(switch_row(
-                "wave",
-                t!("tuning.wave").to_string(),
-                settings.audio_zones,
-                cx.listener(|this, _, _, cx| {
-                    this.change_settings(|s| s.audio_zones = !s.audio_zones, cx)
-                }),
-            ));
-        }
         rows.child(switch_row(
             "restore-white",
             t!("tuning.restore_white").to_string(),
@@ -402,6 +415,29 @@ impl Root {
                 this.change_settings(|s| s.restore_white = !s.restore_white, cx)
             }),
         ))
+    }
+
+    /// Music mode: every panel pulses with the bass, or a meter of the
+    /// volume lights as many panels as the sound is loud.
+    fn render_music_style(&self, cx: &mut Context<Self>) -> Div {
+        let style = self.profile.settings.music_style;
+        let option = |id: &'static str, key: &str, value: MusicStyle, cx: &mut Context<Self>| {
+            (
+                id,
+                t!(key).to_string(),
+                style == value,
+                Box::new(cx.listener(move |this: &mut Self, _: &ClickEvent, _, cx| {
+                    this.change_settings(|s| s.music_style = value, cx)
+                })) as ClickHandler,
+            )
+        };
+        choice(
+            t!("tuning.music_style").to_string(),
+            vec![
+                option("music-pulse", "tuning.music_pulse", MusicStyle::Pulse, cx),
+                option("music-level", "tuning.music_level", MusicStyle::Level, cx),
+            ],
+        )
     }
 
     /// Music colors: the rainbow, or one hue.

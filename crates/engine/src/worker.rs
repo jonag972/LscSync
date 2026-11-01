@@ -12,8 +12,8 @@ use std::time::{Duration, Instant};
 
 use lscsync_core::color::{dominant_color_with, to_lamp};
 use lscsync_core::{
-    AudioHue, ColorCommand, DarkScenes, DeviceColors, Hsv, Mode, Product, Rgb, Settings, Snapshot,
-    Zone,
+    AudioHue, ColorCommand, DarkScenes, DeviceColors, Hsv, Mode, MusicStyle, Product, Rgb,
+    Settings, Snapshot, Zone,
 };
 use thiserror::Error;
 use tokio::sync::watch;
@@ -626,6 +626,10 @@ impl Engine {
         self.bass.min_brightness = self.settings.audio_min_light;
         self.bass.max_brightness = self.settings.lum_max as f32;
         self.bass.hue_speed = self.settings.hue_speed as f32;
+        self.bass.bass_range = (
+            f32::from(self.settings.music_bass_min_hz),
+            f32::from(self.settings.music_bass_max_hz),
+        );
 
         // Wait for the next block of samples (100 ms at most, to stay
         // responsive to the stop signal). No sound: a silent block, so the
@@ -652,20 +656,25 @@ impl Engine {
             AudioHue::Cycle => self.bass.cycling_hue(),
             AudioHue::Fixed => self.settings.audio_fixed_hue as f32 / 360.0,
         };
-        let zones = self.bass.process(&samples, hue, self.settings.audio_zones);
+        let pulse = self.bass.process(&samples, hue);
         let bands = self.bass.bands().to_vec();
+        let lit = Hsv::new(hue, 1.0, (self.settings.lum_max as f32 / 100.0).min(1.0));
         let mut frames = Vec::new();
         let mut devices = Vec::new();
         for link in &self.links {
-            // The 3 music zones spread over the device's zones, left to right.
             let count = link.zones.len().max(1);
-            let colors: Vec<Hsv> = (0..count)
-                .map(|zone| zones[zone * zones.len() / count])
-                .collect();
-            let frame = match link.product {
+            let (colors, frame) = match (link.product, self.settings.music_style) {
                 // Through the instant DP 51 scene: what the bass needs.
-                Product::Panels => Frame::Zones(colors.clone()),
-                Product::Light => Frame::Color(zones[0]),
+                (Product::Panels, MusicStyle::Pulse) => {
+                    let colors = vec![pulse; count];
+                    (colors.clone(), Frame::Zones(colors))
+                }
+                (Product::Panels, MusicStyle::Level) => {
+                    let colors = meter(self.bass.volume(), count, lit, self.settings.invert_zones);
+                    (colors.clone(), Frame::Zones(colors))
+                }
+                // A single color: no meter to draw, the light pulses.
+                (Product::Light, _) => (vec![pulse; count], Frame::Color(pulse)),
             };
             frames.push(frame);
             devices.push(DeviceColors {
@@ -772,6 +781,21 @@ impl Stats {
             *self = Self::new();
         }
     }
+}
+
+/// The music meter: as many zones lit as `volume` (0.0 to 1.0) of `count`,
+/// from the first zone (the last one with `invert`). The others are off
+/// (v = 0); the scene can't turn a single panel off, so the panels show them
+/// white (saturation 0), and the app's preview dark.
+fn meter(volume: f32, count: usize, lit: Hsv, invert: bool) -> Vec<Hsv> {
+    let on = ((volume * count as f32).round() as usize).min(count);
+    let off = Hsv::new(lit.h, 0.0, 0.0);
+    (0..count)
+        .map(|zone| {
+            let rank = if invert { count - 1 - zone } else { zone };
+            if rank < on { lit } else { off }
+        })
+        .collect()
 }
 
 /// Contrast, dark scenes and the brightness floor of the screen modes,
@@ -942,6 +966,23 @@ mod tests {
             dark_scenes,
             ..Settings::default()
         }
+    }
+
+    #[test]
+    fn the_meter_lights_as_many_zones_as_the_volume() {
+        let lit = |colors: &[Hsv]| colors.iter().map(|c| c.v > 0.0).collect::<Vec<_>>();
+        assert_eq!(lit(&meter(0.0, 6, RED, false)), [false; 6]);
+        assert_eq!(
+            lit(&meter(0.5, 6, RED, false)),
+            [true, true, true, false, false, false]
+        );
+        assert_eq!(
+            lit(&meter(0.5, 6, RED, true)),
+            [false, false, false, true, true, true]
+        );
+        assert_eq!(lit(&meter(1.0, 6, RED, false)), [true; 6]);
+        // Off zones are white on the panels: no saturation.
+        assert_eq!(meter(0.0, 3, RED, false)[0].s, 0.0);
     }
 
     #[test]

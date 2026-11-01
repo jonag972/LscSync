@@ -1,20 +1,13 @@
 //! Main page: on the left, the screen with what each light reflects and the
 //! modes; on the right, the main button, the lights and the adjustments.
-//! While the sync runs, the background takes a faint tint of the lights.
 
 use gpui_kit::prelude::FluentBuilder as _;
 use gpui_kit::*;
-use lscsync_core::{Mode, Rgb};
+use lscsync_core::Mode;
 use rust_i18n::t;
 
 use crate::theme::*;
-use crate::{AUDIO_SUPPORTED, Page, Phase, Root, display_color, mode_label};
-
-/// Strength of the lights' tint over the background.
-const TINT_STRENGTH: f32 = 0.14;
-/// Share of the way to the lights' color the tint covers every 40 ms:
-/// about a second to settle.
-const TINT_EASING: f32 = 0.05;
+use crate::{AUDIO_SUPPORTED, Page, Phase, Root, mode_label};
 
 impl Root {
     pub(crate) fn render_home(&self, cx: &mut Context<Self>) -> Div {
@@ -343,65 +336,5 @@ impl Root {
                             .child(t!("footer.quit").to_string()),
                     ),
             )
-    }
-
-    /// Moves the background tint toward the lights' average color while the
-    /// sync runs, back to plain when it stops. True only when it actually
-    /// moved, so the window is not redrawn 25 times a second for nothing.
-    pub(crate) fn update_tint(&mut self) -> bool {
-        let target = self
-            .snapshot
-            .as_ref()
-            .filter(|_| self.preferences.ambient_background)
-            .and_then(|snapshot| {
-                let colors: Vec<Rgba> = snapshot.all().map(|c| display_color(*c)).collect();
-                (!colors.is_empty()).then(|| {
-                    let n = colors.len() as f32;
-                    Rgb::new(
-                        colors.iter().map(|c| c.r).sum::<f32>() / n,
-                        colors.iter().map(|c| c.g).sum::<f32>() / n,
-                        colors.iter().map(|c| c.b).sum::<f32>() / n,
-                    )
-                })
-            });
-        let level_target = if target.is_some() { 1.0 } else { 0.0 };
-        let old_level = self.tint_level;
-        let old_tint = self.tint;
-        self.tint_level += (level_target - self.tint_level) * TINT_EASING;
-        if let Some(target) = target {
-            let current = self.tint.unwrap_or(target);
-            self.tint = Some(Rgb::new(
-                current.r + (target.r - current.r) * TINT_EASING,
-                current.g + (target.g - current.g) * TINT_EASING,
-                current.b + (target.b - current.b) * TINT_EASING,
-            ));
-        }
-        // Fully faded out: back to the plain background.
-        if level_target == 0.0 && self.tint_level < 0.005 {
-            self.tint_level = 0.0;
-            self.tint = None;
-        }
-        let level_changed = (self.tint_level - old_level).abs() > 0.0005;
-        let tint_changed = match (old_tint, self.tint) {
-            (Some(a), Some(b)) => (a.r - b.r).abs() + (a.g - b.g).abs() + (a.b - b.b).abs() > 0.001,
-            (None, Some(_)) => true,
-            _ => false,
-        };
-        level_changed || tint_changed
-    }
-
-    /// The window background: plain, or tinted by the lights.
-    pub(crate) fn background(&self) -> Rgba {
-        let base = rgb(BG);
-        let Some(tint) = self.tint else {
-            return base;
-        };
-        let amount = TINT_STRENGTH * self.tint_level;
-        Rgba {
-            r: base.r + (tint.r - base.r) * amount,
-            g: base.g + (tint.g - base.g) * amount,
-            b: base.b + (tint.b - base.b) * amount,
-            a: 1.0,
-        }
     }
 }

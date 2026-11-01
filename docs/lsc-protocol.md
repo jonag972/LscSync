@@ -84,7 +84,9 @@ change mode (1 hex digit, 0 = direct) | hue HHHH (0-360) | saturation SSSS | val
   25 frames/s for 2 minutes without a freeze. This is what Ambilight uses.
 - **6 colors + `0x80`**: each color covers 2 segments, so the kit shows **3 zones of 2
   panels** and colors 4 to 6 land on segments without a panel. Music mode still uses this.
-- A single brightness for the whole scene.
+- A single brightness for the whole scene. **A single panel can't be turned off** (01/11/2026):
+  hue 0 / saturation 0 shows white, and out-of-range segments (saturation 101 or 255, hue 361,
+  `0x8000` or `0xFFFF`) are clamped into range and show a color, never off.
 - Applied **instantly** (no fade).
 - Earlier trials (13 option and mode variants, the `0x60` option of official scenes) never gave
   anything finer than 3 pairs; the 12-color scene above does.

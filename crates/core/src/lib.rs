@@ -17,5 +17,5 @@ pub use color::{Hsv, Image, Rgb};
 pub use layout::{Capabilities, ColorCommand, DataPoint, Product, Zone};
 pub use preferences::{Language, Preferences};
 pub use profile::{Device, Profile, ProfileError};
-pub use settings::{AudioHue, DarkScenes, Mode, Settings};
+pub use settings::{AudioHue, DarkScenes, Mode, MusicStyle, Settings};
 pub use snapshot::{DeviceColors, Snapshot};

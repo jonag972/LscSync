@@ -128,9 +128,6 @@ struct Root {
     drag: Option<screen::Drag>,
     /// Zone chosen on the preview, lit in white while the sync runs.
     selected_zone: Option<usize>,
-    /// The lights' color behind the window, and how much it shows (0 to 1).
-    tint: Option<lscsync_core::Rgb>,
-    tint_level: f32,
     /// Polls since the last screen capture.
     polls_since_capture: u32,
     /// Synced devices that do not answer.
@@ -197,8 +194,6 @@ impl Root {
             selected_light: None,
             drag: None,
             selected_zone: None,
-            tint: None,
-            tint_level: 0.0,
             polls_since_capture: u32::MAX,
             unreachable: Vec::new(),
             calibration: None,
@@ -233,7 +228,7 @@ impl Root {
                 if this
                     .update(cx, |root, cx| {
                         let changed = root.drain_events();
-                        if root.update_tint() || changed {
+                        if changed {
                             cx.notify();
                         }
                         root.refresh_preview_now_and_then(cx);
@@ -512,7 +507,7 @@ impl Render for Root {
             .size_full()
             .flex()
             .flex_col()
-            .bg(self.background())
+            .bg(rgb(BG))
             .font_family(FONT)
             .text_color(rgb(TEXT));
         if let Some(setup) = &self.setup {

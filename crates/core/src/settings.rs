@@ -32,6 +32,17 @@ pub enum AudioHue {
     Fixed,
 }
 
+/// What the panels show in music mode.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum MusicStyle {
+    /// Every panel pulses with the bass.
+    #[default]
+    Pulse,
+    /// A meter: as many panels lit as the sound is loud.
+    Level,
+}
+
 /// What the screen modes do when the picture goes dark.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -67,8 +78,10 @@ pub struct Settings {
     pub audio_fixed_hue: u16,
     #[serde(rename = "music_min_brightness", alias = "audio_lum_min")]
     pub audio_min_light: f32,
-    #[serde(rename = "music_offset_zones", alias = "audio_zones")]
-    pub audio_zones: bool,
+    pub music_style: MusicStyle,
+    /// Music mode, Pulse: the frequency range treated as the bass, in Hz.
+    pub music_bass_min_hz: u16,
+    pub music_bass_max_hz: u16,
     #[serde(alias = "retour_blanc")]
     pub restore_white: bool,
     #[serde(alias = "inverser_zones")]
@@ -105,7 +118,9 @@ impl Default for Settings {
             audio_hue: AudioHue::Cycle,
             audio_fixed_hue: 200,
             audio_min_light: 0.02,
-            audio_zones: false,
+            music_style: MusicStyle::Pulse,
+            music_bass_min_hz: 20,
+            music_bass_max_hz: 250,
             restore_white: true,
             invert_zones: false,
             screen_min_light: 0.0,
@@ -130,6 +145,9 @@ mod tests {
         assert_eq!(json["mode"], "ambilight");
         assert_eq!(json["max_brightness"], 100);
         assert_eq!(json["invert_zones"], false);
+        assert_eq!(json["music_style"], "pulse");
+        assert_eq!(json["music_bass_min_hz"], 20);
+        assert_eq!(json["music_bass_max_hz"], 250);
     }
 
     #[test]
@@ -144,6 +162,15 @@ mod tests {
         assert_eq!(settings.smoothing, 0.2);
         assert_eq!(settings.audio_hue, AudioHue::Fixed);
         assert!(settings.invert_zones);
+    }
+
+    #[test]
+    fn old_profiles_get_the_music_defaults() {
+        let settings: Settings =
+            serde_json::from_str(r#"{"mode": "music", "music_offset_zones": true}"#).expect("load");
+        assert_eq!(settings.music_style, MusicStyle::Pulse);
+        assert_eq!(settings.music_bass_min_hz, 20);
+        assert_eq!(settings.music_bass_max_hz, 250);
     }
 
     #[test]

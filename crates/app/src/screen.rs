@@ -1,14 +1,14 @@
-//! The monitor on the main page, whatever the mode: in the screen modes, a
-//! live capture with the part of the screen each light reflects drawn on it;
-//! in music mode, an equalizer of the sound; in fixed color mode, the color
-//! itself. A selected light's zones can be moved and resized on the capture,
+//! The monitor on the main page: in the screen modes, a live capture with
+//! the part of the screen each light reflects drawn on it; in fixed color
+//! mode, the color itself. Music mode shows a glowing equalizer instead,
+//! straight on the window's black. A selected light's zones can be moved and resized on the capture,
 //! and a light can be calibrated.
 
 use std::sync::Arc;
 
 use gpui_kit::prelude::FluentBuilder as _;
 use gpui_kit::*;
-use lscsync_core::{ColorCommand, Hsv, Mode, Product, Zone};
+use lscsync_core::{AudioHue, ColorCommand, Hsv, Mode, Product, Zone};
 use lscsync_engine::audio::bass::EQ_BANDS;
 use lscsync_engine::capture::ScreenCapture;
 use lscsync_engine::tuya::{LscConfig, flip_colors_blocking};
@@ -27,10 +27,19 @@ const SCREEN_WIDTH: f32 = MONITOR_WIDTH - 2.0 * BEZEL;
 const DEFAULT_RATIO: f32 = 9.0 / 16.0;
 /// How long the light flips between two colors before the question.
 const CALIBRATION_FLIPS: std::time::Duration = std::time::Duration::from_secs(4);
-/// Padding inside the monitor frame around the equalizer bars.
-const EQ_PADDING: f32 = 14.0;
+/// Side padding around the equalizer bars.
+const EQ_PADDING: f32 = 24.0;
 /// Gap between two equalizer bars.
-const EQ_GAP: f32 = 3.0;
+const EQ_GAP: f32 = 6.0;
+/// Height of a bar at rest, so the equalizer reads even in silence.
+const EQ_REST: f32 = 4.0;
+/// Share of the equalizer's height above the baseline; the rest holds the
+/// reflection.
+const EQ_BASELINE: f32 = 0.72;
+/// How much of the color wheel the bars span with the cycling hue: the
+/// rainbow slides along them. A fixed hue stays nearly one color.
+const EQ_SPREAD_CYCLE: f32 = 0.55;
+const EQ_SPREAD_FIXED: f32 = 0.06;
 
 /// Small capture of the screen, behind the zones.
 pub struct ScreenPreview {
@@ -193,6 +202,9 @@ impl Root {
     /// it; music mode shows an equalizer; fixed color mode shows the color.
     pub(crate) fn render_screen(&self, cx: &mut Context<Self>) -> Div {
         let mode = self.profile.settings.mode;
+        if mode == Mode::Audio {
+            return self.render_equalizer();
+        }
         let height = match mode {
             Mode::ScreenZones | Mode::Screen => SCREEN_WIDTH * self.preview_ratio(),
             // Nothing captured to fit: a 16:9 footprint, like an idle preview.
@@ -212,8 +224,7 @@ impl Root {
                 }
                 picture.children(self.zone_boxes(height, cx))
             }
-            Mode::Audio => self.render_equalizer(height),
-            Mode::Fixed => self.render_swatch(),
+            Mode::Fixed | Mode::Audio => self.render_swatch(),
         };
         let screen = div()
             .relative()
@@ -254,35 +265,85 @@ impl Root {
             )
     }
 
-    /// Music mode, inside the monitor frame: the spectrum bands as bars, in
-    /// the hue the lights are showing right now (the accent when idle).
-    fn render_equalizer(&self, height: f32) -> Div {
+    /// Music mode: the spectrum bands as glowing bars on a baseline, with a
+    /// faint reflection under it, in the footprint of the monitor. The hues
+    /// start from the one the lights show now (the accent when idle).
+    fn render_equalizer(&self) -> Div {
         let bands: &[f32] = self
             .snapshot
             .as_ref()
             .map_or(&[], |snapshot| snapshot.bands.as_slice());
-        // The hue the lights show now: the first live zone color.
-        let hue = self
+        let settings = &self.profile.settings;
+        let live = self
             .snapshot
             .as_ref()
-            .and_then(|snapshot| snapshot.all().next().copied())
-            .map_or(ACCENT_HUE, |color| color.h);
-        let inner = height - 2.0 * EQ_PADDING;
-        div()
-            .relative()
-            .size_full()
+            .and_then(|snapshot| snapshot.all().find(|color| color.s > 0.0).copied());
+        let (hue, spread) = match (live, settings.audio_hue) {
+            (None, _) => (ACCENT_HUE, EQ_SPREAD_FIXED),
+            (Some(color), AudioHue::Cycle) => (color.h, EQ_SPREAD_CYCLE),
+            (Some(color), AudioHue::Fixed) => (color.h, EQ_SPREAD_FIXED),
+        };
+        let idle = bands.is_empty();
+        // The monitor's whole footprint: frame, picture and stand.
+        let height = SCREEN_WIDTH * DEFAULT_RATIO + 2.0 * BEZEL + 19.0;
+        let top = height * EQ_BASELINE;
+        let bottom = height - top;
+        let bar_hue = |i: usize| (hue + spread * i as f32 / EQ_BANDS as f32).rem_euclid(1.0);
+        let level = |i: usize| bands.get(i).copied().unwrap_or(0.0).clamp(0.0, 1.0);
+        let bar_height = |i: usize| EQ_REST + level(i) * (top - EQ_PADDING - EQ_REST);
+
+        let bars = div()
+            .h(px(top))
             .flex()
             .items_end()
             .gap(px(EQ_GAP))
-            .p(px(EQ_PADDING))
             .children((0..EQ_BANDS).map(|i| {
-                let level = bands.get(i).copied().unwrap_or(0.0);
-                div()
+                let h = bar_hue(i);
+                let level = level(i);
+                let bar = div().flex_1().h(px(bar_height(i))).rounded_t(px(3.0));
+                if idle {
+                    return bar.bg(rgb(LINE_STRONG));
+                }
+                bar.bg(linear_gradient(
+                    180.0,
+                    linear_color_stop(eq_color(h, 0.3, 1.0, 1.0), 0.0),
+                    linear_color_stop(eq_color(h, 0.85, 0.95, 1.0), 1.0),
+                ))
+                .shadow(vec![
+                    BoxShadow::new(px(0.0), px(0.0), eq_color(h, 0.9, 1.0, 0.55 * level).into())
+                        .blur_radius(px(14.0)),
+                ])
+            }));
+        // The bars mirrored under the baseline, fading out.
+        let reflection = div()
+            .h(px(bottom))
+            .pt(px(3.0))
+            .flex()
+            .items_start()
+            .gap(px(EQ_GAP))
+            .children((0..EQ_BANDS).map(|i| {
+                let h = bar_hue(i);
+                let bar = div()
                     .flex_1()
-                    .h(px(2.0 + level * inner))
-                    .rounded(px(2.0))
-                    .bg(display_color(Hsv::new(hue, 1.0, level)))
-            }))
+                    .h(px(bar_height(i).min(bottom - 3.0) * 0.6))
+                    .rounded_b(px(3.0));
+                if idle {
+                    return bar;
+                }
+                bar.bg(linear_gradient(
+                    180.0,
+                    linear_color_stop(eq_color(h, 0.85, 0.95, 0.22), 0.0),
+                    linear_color_stop(eq_color(h, 0.85, 0.95, 0.0), 1.0),
+                ))
+            }));
+        div()
+            .w(px(MONITOR_WIDTH))
+            .h(px(height))
+            .px(px(EQ_PADDING))
+            .flex()
+            .flex_col()
+            .child(bars)
+            .child(reflection)
     }
 
     /// Fixed color mode, inside the monitor frame: the chosen color as a
@@ -716,4 +777,15 @@ fn stepper(
                 .child(count.to_string()),
         )
         .child(step("+", count + 1, cx))
+}
+
+/// A color of the equalizer, with its opacity.
+fn eq_color(hue: f32, saturation: f32, value: f32, alpha: f32) -> Rgba {
+    let c = Hsv::new(hue, saturation, value).to_rgb();
+    Rgba {
+        r: c.r,
+        g: c.g,
+        b: c.b,
+        a: alpha,
+    }
 }

@@ -285,6 +285,17 @@ impl Root {
                     self.error = Some((kind, message));
                     changed = true;
                 }
+                EngineEvent::ZonesDetected { device, multi_zone } => {
+                    if let Some(device) = self.profile.devices.iter_mut().find(|d| d.id == device) {
+                        device.multi_zone = Some(multi_zone);
+                        // The engine took the default row of zones: show the same.
+                        if multi_zone {
+                            device.zones.clear();
+                        }
+                        self.save();
+                        changed = true;
+                    }
+                }
                 EngineEvent::AutomaticDelay(delay) => {
                     let ms = delay.as_millis() as u16;
                     if self.automatic_delay != ms {

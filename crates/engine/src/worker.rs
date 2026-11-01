@@ -28,6 +28,9 @@ use crate::{Latest, LatestSender};
 const CONNECT_TIMEOUT: Duration = Duration::from_secs(10);
 /// How long a device has to say what it shows before the sync.
 const STATE_TIMEOUT: Duration = Duration::from_secs(2);
+/// How long a light has to report its scene back (it took the panel kit
+/// well under a second).
+const DETECT_TIMEOUT: Duration = Duration::from_secs(2);
 
 // A color is only sent again when it changed at least this much.
 const HUE_THRESHOLD: f32 = 0.02;
@@ -100,6 +103,9 @@ pub struct Target {
     pub zones: Vec<Zone>,
     /// How a single color is sent to a light.
     pub color: ColorCommand,
+    /// Zones to use if the light turns out to have several, checked when
+    /// it connects; `None` once that is known.
+    pub detect_zones: Option<Vec<Zone>>,
 }
 
 impl Target {
@@ -111,6 +117,9 @@ impl Target {
             product: Product::of(device),
             zones: device.layout(top_height),
             color: device.color_command(),
+            detect_zones: device
+                .zones_unknown()
+                .then(|| Product::MultiZone.default_zones(top_height)),
         }
     }
 }
@@ -131,6 +140,12 @@ pub enum EngineEvent {
     Error {
         kind: ErrorKind,
         message: String,
+    },
+    /// Whether a light has several zones, found when it connected: the
+    /// app saves it.
+    ZonesDetected {
+        device: String,
+        multi_zone: bool,
     },
     /// The default sound output changed and the automatic Music delay
     /// followed it (a delay chosen by hand does not).
@@ -335,6 +350,7 @@ impl Engine {
             .iter()
             .map(|target| {
                 let config = target.config.clone();
+                let detect = target.detect_zones.is_some();
                 runtime.spawn(async move {
                     let lsc = Lsc::connect(&config, CONNECT_TIMEOUT).await?;
                     let before = if read_state {
@@ -342,20 +358,38 @@ impl Engine {
                     } else {
                         None
                     };
-                    Ok((lsc, before))
+                    let multi_zone = if detect {
+                        lsc.detect_zones(DETECT_TIMEOUT).await
+                    } else {
+                        None
+                    };
+                    Ok((lsc, before, multi_zone))
                 })
             })
             .collect();
         let mut links = Vec::new();
         let mut first_error = None;
-        for (target, connection) in targets.into_iter().zip(connections) {
+        for (mut target, connection) in targets.into_iter().zip(connections) {
             let connected = runtime
                 .block_on(connection)
                 .map_err(|error| LscError::Io(error.to_string()))
                 .and_then(|result| result);
             match connected {
-                Ok((lsc, before)) => {
+                Ok((lsc, before, multi_zone)) => {
                     tracing::info!("{}: connected", target.name);
+                    if let Some(multi_zone) = multi_zone {
+                        tracing::info!("{}: several zones: {multi_zone}", target.name);
+                        if multi_zone && let Some(zones) = target.detect_zones.take() {
+                            target.product = Product::MultiZone;
+                            target.zones = zones;
+                        }
+                        if let Some(events) = &events {
+                            events.send(EngineEvent::ZonesDetected {
+                                device: target.config.device_id.clone(),
+                                multi_zone,
+                            });
+                        }
+                    }
                     if read_state {
                         tracing::info!("{}: before the sync: {before:?}", target.name);
                     }

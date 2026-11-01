@@ -42,6 +42,10 @@ pub struct Device {
     /// How its color is sent, once calibrated by the user.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub color_command: Option<ColorCommand>,
+    /// Whether it has several zones, once the engine has checked (see
+    /// [`crate::layout::Product::of`]).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub multi_zone: Option<bool>,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -129,6 +133,7 @@ impl Profile {
                 zones: Vec::new(),
                 capabilities: None,
                 color_command: None,
+                multi_zone: None,
             });
         }
         Ok(profile)
@@ -228,6 +233,7 @@ impl Profile {
                     device.modes = std::mem::take(&mut known.modes);
                     device.zones = std::mem::take(&mut known.zones);
                     device.color_command = known.color_command;
+                    device.multi_zone = known.multi_zone;
                     if device.capabilities.is_none() {
                         device.capabilities = known.capabilities.take();
                     }
@@ -265,6 +271,7 @@ mod tests {
             zones: Vec::new(),
             capabilities: None,
             color_command: None,
+            multi_zone: None,
         }
     }
 

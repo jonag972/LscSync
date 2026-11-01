@@ -51,8 +51,7 @@ pub enum LightState {
 /// Reads a status reply (`{"dps": {...}}`, or under `"data"`). `None` when
 /// it says neither the power nor the mode.
 pub fn parse_status(payload: &[u8]) -> Option<LightState> {
-    let json: serde_json::Value = serde_json::from_slice(payload).ok()?;
-    let dps = json.get("dps").or_else(|| json.get("data")?.get("dps"))?;
+    let dps = reported_dps(payload)?;
     let power = dps.get(DP_POWER).and_then(serde_json::Value::as_bool);
     let mode = dps.get(DP_MODE).and_then(serde_json::Value::as_str);
     let brightness = dps
@@ -67,6 +66,15 @@ pub fn parse_status(payload: &[u8]) -> Option<LightState> {
         // On, mode unknown.
         (Some(true), None) => Some(LightState::Other),
     }
+}
+
+/// The data points a frame from the light reports (`{"dps": {...}}`, or
+/// under `"data"`). `None` for a frame without any, like a bare
+/// acknowledgment.
+pub fn reported_dps(payload: &[u8]) -> Option<serde_json::Map<String, serde_json::Value>> {
+    let json: serde_json::Value = serde_json::from_slice(payload).ok()?;
+    let dps = json.get("dps").or_else(|| json.get("data")?.get("dps"))?;
+    dps.as_object().cloned()
 }
 
 /// DP 24 value: HHHHSSSSVVVV in hexadecimal (0-360, 0-1000, 0-1000).
@@ -260,5 +268,13 @@ mod tests {
         let value = dp_scene_zones(&[Hsv::new(0.0, 1.0, 0.0); 3], false);
         let bytes = STANDARD.decode(value).expect("valid base64");
         assert_eq!(bytes[8], 1);
+    }
+
+    #[test]
+    fn reported_dps_of_a_push_but_not_of_an_acknowledgment() {
+        // Frames from the panel kit (01/11/2026).
+        let push = br#"{"protocol":4,"t":1793548111,"data":{"dps":{"51":"AWMAMjKAAABkAABk"}}}"#;
+        assert!(reported_dps(push).is_some_and(|dps| dps.contains_key(DP_SCENE)));
+        assert_eq!(reported_dps(b""), None);
     }
 }

@@ -116,25 +116,20 @@ const PANEL_KIT_PRODUCT_KEY: &str = "duxmr5beo0hrowle";
 /// How a device is driven, from what is known about its product.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Product {
-    /// The LSC panel kit: several zones, one color each, applied instantly
-    /// (a 12-segment DP 51 scene, so up to 12 zones), and an instant single
-    /// color (DP 27).
+    /// Several zones, one color each, applied instantly (a 12-segment DP 51
+    /// scene, so up to 12 zones), and an instant single color (DP 27): the
+    /// LSC panel kit, or a light found to have the scene.
     MultiZone,
     /// Any other light: one color (DP 24).
     Light,
 }
 
 impl Product {
-    /// Recognized by Tuya's product key, or by the product name for devices
-    /// added before the app fetched it.
+    /// What the engine detected (Tuya doesn't say which lights have zones),
+    /// or the panel kit, recognized by Tuya's product key or by the
+    /// product name for devices added before the app fetched it.
     pub fn of(device: &Device) -> Self {
-        let key = device.capabilities.as_ref().map(|c| c.product_key.as_str());
-        if key == Some(PANEL_KIT_PRODUCT_KEY)
-            || device
-                .product
-                .trim()
-                .eq_ignore_ascii_case("Smart panel lights")
-        {
+        if device.is_panel_kit() || device.multi_zone == Some(true) {
             Self::MultiZone
         } else {
             Self::Light
@@ -167,6 +162,21 @@ impl Product {
 }
 
 impl Device {
+    fn is_panel_kit(&self) -> bool {
+        let key = self.capabilities.as_ref().map(|c| c.product_key.as_str());
+        key == Some(PANEL_KIT_PRODUCT_KEY)
+            || self
+                .product
+                .trim()
+                .eq_ignore_ascii_case("Smart panel lights")
+    }
+
+    /// Whether the engine should check for zones when it connects: not
+    /// known yet, and not the panel kit.
+    pub fn zones_unknown(&self) -> bool {
+        self.multi_zone.is_none() && !self.is_panel_kit()
+    }
+
     /// The device's zones on the screen: the saved ones, or the product's
     /// default layout.
     pub fn layout(&self, top_height: f32) -> Vec<Zone> {
@@ -263,6 +273,25 @@ mod tests {
         assert_eq!(light.color_command(), ColorCommand::Direct);
         light.color_command = Some(ColorCommand::Fade);
         assert_eq!(light.color_command(), ColorCommand::Fade);
+    }
+
+    #[test]
+    fn detected_zones_decide_unless_it_is_the_panel_kit() {
+        let mut bar: Device =
+            serde_json::from_str(r#"{"id": "b", "name": "Bar", "local_key": "k"}"#).unwrap();
+        assert!(bar.zones_unknown());
+        assert_eq!(Product::of(&bar), Product::Light);
+        bar.multi_zone = Some(true);
+        assert!(!bar.zones_unknown());
+        assert_eq!(Product::of(&bar), Product::MultiZone);
+
+        let mut kit: Device = serde_json::from_str(
+            r#"{"id": "a", "name": "Panels", "local_key": "k", "product": "Smart panel lights"}"#,
+        )
+        .unwrap();
+        assert!(!kit.zones_unknown());
+        kit.multi_zone = Some(false);
+        assert_eq!(Product::of(&kit), Product::MultiZone);
     }
 
     #[test]

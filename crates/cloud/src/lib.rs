@@ -70,6 +70,7 @@ impl From<CloudDevice> for lscsync_core::Device {
             zones: Vec::new(),
             capabilities: None,
             color_command: None,
+            multi_zone: None,
         }
     }
 }

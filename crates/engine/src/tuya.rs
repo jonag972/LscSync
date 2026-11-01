@@ -203,6 +203,34 @@ impl Lsc {
         Ok(())
     }
 
+    /// Whether the light has several zones, which Tuya doesn't say: in scene
+    /// mode, given a white DP 51 scene, a light that has it reports the scene
+    /// back; others only report the power and the mode (panel kit and an
+    /// unknown DP, 01/11/2026). `None` when the light reports nothing at all
+    /// within `timeout`.
+    pub async fn detect_zones(&self, timeout: Duration) -> Option<bool> {
+        let mut events = self.listener();
+        let white = Hsv::new(0.0, 0.0, 1.0);
+        self.send_scene_segments(&[white]).await.ok()?;
+        let mut answered = false;
+        let found = tokio::time::timeout(timeout, async {
+            while let Some(event) = events.recv().await {
+                if let rustuya::tokio::Event::Frame(frame) = event
+                    && let Some(dps) = protocol::reported_dps(&frame.payload)
+                {
+                    if dps.contains_key(protocol::DP_SCENE) {
+                        return true;
+                    }
+                    answered = true;
+                }
+            }
+            false
+        })
+        .await
+        .unwrap_or(false);
+        (found || answered).then_some(found)
+    }
+
     /// Asks the light what it shows. `None` without an answer in `timeout`.
     pub async fn read_state(&self, timeout: Duration) -> Option<protocol::LightState> {
         let mut events = self.listener();

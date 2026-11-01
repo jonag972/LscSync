@@ -127,7 +127,7 @@ impl Root {
         })
     }
 
-    fn save_preferences(&self) {
+    pub(crate) fn save_preferences(&self) {
         if let Err(error) = self.preferences.save(&preferences_path()) {
             tracing::warn!("preferences not saved: {error}");
         }

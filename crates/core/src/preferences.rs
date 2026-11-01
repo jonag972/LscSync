@@ -40,6 +40,8 @@ pub struct Preferences {
     pub check_updates: bool,
     /// Update notice closed by the user: not shown again for this version.
     pub dismissed_update: Option<String>,
+    /// The "More settings" adjustments were left unfolded.
+    pub advanced_open: bool,
 }
 
 impl Default for Preferences {
@@ -48,6 +50,7 @@ impl Default for Preferences {
             language: Language::Auto,
             check_updates: true,
             dismissed_update: None,
+            advanced_open: false,
         }
     }
 }
@@ -90,5 +93,6 @@ mod tests {
         assert_eq!(preferences.language, Language::French);
         assert!(preferences.check_updates);
         assert_eq!(preferences.dismissed_update, None);
+        assert!(!preferences.advanced_open);
     }
 }

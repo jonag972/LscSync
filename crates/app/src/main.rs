@@ -6,7 +6,7 @@
 
 use std::borrow::Cow;
 use std::sync::{Arc, LazyLock, mpsc};
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use gpui_kit::component::slider::{SliderEvent, SliderState};
 use gpui_kit::component::{Theme, ThemeMode};
@@ -56,6 +56,9 @@ static AUDIO_SUPPORTED: LazyLock<bool> = LazyLock::new(lscsync_engine::audio::is
 /// Music mode hears the room through the microphone (macOS 12 without a
 /// loopback driver). Checked once: it lists the audio devices.
 static MUSIC_VIA_MICROPHONE: LazyLock<bool> = LazyLock::new(lscsync_engine::audio::uses_microphone);
+
+/// How long a slider stays still before its new value is saved.
+const SLIDER_SAVE_DELAY: Duration = Duration::from_millis(500);
 
 struct AppState {
     tray: Option<Tray>,
@@ -144,8 +147,8 @@ struct Root {
     error: Option<(ErrorKind, String)>,
     /// One slider per adjustment, shown or not depending on the mode.
     sliders: Vec<(tuning::Knob, Entity<SliderState>)>,
-    /// The Advanced adjustments are unfolded.
-    advanced_open: bool,
+    /// A slider moved and the profile is not saved yet: when it last moved.
+    unsaved_since: Option<Instant>,
     /// Last state shown in the menu bar, to refresh it only on change.
     tray_shown: Option<TrayKey>,
     _subscriptions: Vec<Subscription>,
@@ -203,7 +206,7 @@ impl Root {
             snapshot: None,
             error: None,
             sliders,
-            advanced_open: false,
+            unsaved_since: None,
             tray_shown: None,
             _subscriptions: subscriptions,
         };
@@ -231,6 +234,7 @@ impl Root {
                         if changed {
                             cx.notify();
                         }
+                        root.save_if_settled();
                         root.refresh_preview_now_and_then(cx);
                         root.sync_tray(cx);
                     })
@@ -436,6 +440,9 @@ impl Root {
 
     /// On quit: give the engine time to set the panels back to white.
     fn shutdown(&mut self) {
+        if self.unsaved_since.take().is_some() {
+            self.save();
+        }
         let handles: Vec<EngineHandle> = self
             .engine
             .take()
@@ -461,10 +468,28 @@ impl Root {
         if let Some(engine) = &self.engine {
             engine.update(self.profile.settings.clone());
         }
+        // Saved on release, and anyway once the slider has been still for a
+        // moment: the release is missed when the mouse comes up elsewhere,
+        // and keyboard changes have none.
         if matches!(event, SliderEvent::Release(_)) {
+            self.unsaved_since = None;
             self.save();
+        } else {
+            self.unsaved_since = Some(Instant::now());
         }
         cx.notify();
+    }
+
+    /// Saves the settings a slider changed once it has been still for
+    /// `SLIDER_SAVE_DELAY`.
+    fn save_if_settled(&mut self) {
+        if self
+            .unsaved_since
+            .is_some_and(|since| since.elapsed() >= SLIDER_SAVE_DELAY)
+        {
+            self.unsaved_since = None;
+            self.save();
+        }
     }
 
     fn save(&self) {

@@ -319,7 +319,7 @@ impl Root {
             );
         }
 
-        let open = self.advanced_open;
+        let open = self.preferences.advanced_open;
         div()
             .flex()
             .flex_col()
@@ -341,7 +341,8 @@ impl Root {
                     .text_color(rgb(TEXT_MUTED))
                     .hover(|style| style.text_color(rgb(TEXT)))
                     .on_click(cx.listener(|this, _, _, cx| {
-                        this.advanced_open = !this.advanced_open;
+                        this.preferences.advanced_open = !this.preferences.advanced_open;
+                        this.save_preferences();
                         cx.notify();
                     }))
                     .child(t!("tuning.advanced").to_string())

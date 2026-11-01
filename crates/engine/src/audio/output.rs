@@ -10,11 +10,23 @@ pub const BLUETOOTH_DELAY: Duration = Duration::from_millis(200);
 
 /// The delay to apply when the user did not choose one.
 pub fn automatic_delay() -> Duration {
-    if output_is_bluetooth() {
+    delay_for(output_is_bluetooth())
+}
+
+/// The automatic delay for an output of this kind: a Bluetooth speaker
+/// plays the sound late, so the lights wait.
+pub fn delay_for(bluetooth: bool) -> Duration {
+    if bluetooth {
         BLUETOOTH_DELAY
     } else {
         Duration::ZERO
     }
+}
+
+/// Identifier of the default output device, when it can be told. Comparing
+/// two reads notices a change of device.
+pub fn default_output_device_id() -> Option<String> {
+    platform::default_output_device_id()
 }
 
 /// Whether the default output device is a Bluetooth one. False when it
@@ -95,6 +107,10 @@ mod platform {
             .and_then(|device| property(device, TRANSPORT_TYPE))
             .is_some_and(|transport| transport == BLUETOOTH || transport == BLUETOOTH_LE)
     }
+
+    pub fn default_output_device_id() -> Option<String> {
+        property(SYSTEM_OBJECT, DEFAULT_OUTPUT_DEVICE).map(|device| device.to_string())
+    }
 }
 
 #[cfg(target_os = "windows")]
@@ -140,6 +156,21 @@ mod platform {
             }
         }
     }
+
+    pub fn default_output_device_id() -> Option<String> {
+        // SAFETY: plain COM calls; the returned string is freed after copying.
+        unsafe {
+            // Already initialized on this thread (in another mode) is fine.
+            let _ = CoInitializeEx(None, COINIT_MULTITHREADED);
+            let enumerator: IMMDeviceEnumerator =
+                CoCreateInstance(&MMDeviceEnumerator, None, CLSCTX_ALL).ok()?;
+            let endpoint = enumerator.GetDefaultAudioEndpoint(eRender, eConsole).ok()?;
+            let id = endpoint.GetId().ok()?;
+            let text = id.to_string().unwrap_or_default();
+            CoTaskMemFree(Some(id.0 as *const _));
+            Some(text)
+        }
+    }
 }
 
 #[cfg(target_os = "linux")]
@@ -147,11 +178,16 @@ mod platform {
     //! PulseAudio / PipeWire: Bluetooth sinks are named `bluez_…`.
 
     pub fn output_is_bluetooth() -> bool {
+        default_output_device_id().is_some_and(|sink| sink.contains("bluez"))
+    }
+
+    pub fn default_output_device_id() -> Option<String> {
         std::process::Command::new("pactl")
             .arg("get-default-sink")
             .output()
             .ok()
-            .is_some_and(|output| String::from_utf8_lossy(&output.stdout).contains("bluez"))
+            .map(|output| String::from_utf8_lossy(&output.stdout).trim().to_owned())
+            .filter(|sink| !sink.is_empty())
     }
 }
 
@@ -159,5 +195,9 @@ mod platform {
 mod platform {
     pub fn output_is_bluetooth() -> bool {
         false
+    }
+
+    pub fn default_output_device_id() -> Option<String> {
+        None
     }
 }

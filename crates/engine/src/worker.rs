@@ -20,6 +20,7 @@ use thiserror::Error;
 use tokio::sync::watch;
 use tokio::task::JoinHandle;
 
+use crate::audio::output_watch::{OutputChange, OutputWatch};
 use crate::capture::{CaptureError, ScreenCapture};
 use crate::tuya::{Lsc, LscConfig, LscError};
 use crate::{Latest, LatestSender};
@@ -47,6 +48,8 @@ const DIM_FACTOR: f32 = 0.96;
 
 /// Single-color updates per second for lights that fade (DP 24).
 const LIGHT_UPDATES_PER_SECOND: f64 = 10.0;
+/// Pause before retrying a recapture after the output device changed.
+const RECAPTURE_RETRY: Duration = Duration::from_secs(2);
 
 #[derive(Debug, Error)]
 pub enum EngineError {
@@ -129,6 +132,9 @@ pub enum EngineEvent {
         kind: ErrorKind,
         message: String,
     },
+    /// The default sound output changed and the automatic Music delay
+    /// followed it (a delay chosen by hand does not).
+    AutomaticDelay(Duration),
     Stopped,
 }
 
@@ -273,6 +279,11 @@ pub struct Engine {
     bass: crate::audio::BassProcessor,
     /// Music mode: delay before the lights show the sound (Bluetooth).
     music_delay: Duration,
+    /// Watches the default sound output (Music mode only).
+    output_watch: Option<OutputWatch>,
+    /// When to recapture the sound on the new output device (Windows ties
+    /// the loopback capture to that device).
+    recapture_at: Option<Instant>,
     /// Music frames waiting for their time, oldest first.
     delayed: std::collections::VecDeque<(Instant, Vec<Frame>, Snapshot)>,
     /// What the lights show now, for the app.
@@ -390,6 +401,11 @@ impl Engine {
         } else {
             None
         };
+        let output_watch = if settings.mode == Mode::Audio {
+            Some(OutputWatch::start())
+        } else {
+            None
+        };
 
         let music_delay = music_delay(&settings);
         Ok(Self {
@@ -403,6 +419,8 @@ impl Engine {
             audio,
             bass: crate::audio::BassProcessor::new(),
             music_delay,
+            output_watch,
+            recapture_at: None,
             delayed: std::collections::VecDeque::new(),
             shown: Snapshot::default(),
             frames: 0,
@@ -458,6 +476,12 @@ impl Engine {
             let frame_start = Instant::now();
             for update in updates.try_iter() {
                 self.apply(update);
+            }
+            if let Some(watch) = &self.output_watch {
+                let changes: Vec<OutputChange> = watch.receiver().try_iter().collect();
+                for change in changes {
+                    self.on_output_change(change, events);
+                }
             }
             let snapshot = self.tick().inspect_err(|error| {
                 tracing::error!("sync stopped: {error}");
@@ -515,6 +539,26 @@ impl Engine {
             }
             Update::Highlight(zone) => self.highlight = zone,
         }
+    }
+
+    /// The default sound output changed: the automatic delay follows it,
+    /// and the capture moves to the new device.
+    fn on_output_change(&mut self, change: OutputChange, events: &LatestSender<EngineEvent>) {
+        tracing::info!(
+            "sound output changed: {}",
+            if change.bluetooth {
+                "Bluetooth"
+            } else {
+                "not Bluetooth"
+            }
+        );
+        if self.settings.music_delay.is_none() {
+            self.music_delay = delay_after_output_change(&self.settings, change);
+            tracing::info!("music delay: {} ms", self.music_delay.as_millis());
+            events.send(EngineEvent::AutomaticDelay(self.music_delay));
+        }
+        // Windows captures through the output device: follow the new one.
+        self.recapture_at = Some(Instant::now());
     }
 
     /// Computes the colors of every device, hands them to the device tasks,
@@ -651,6 +695,23 @@ impl Engine {
             f32::from(self.settings.music_bass_max_hz),
         );
 
+        // The output device changed: recapture on the new one (Windows ties
+        // the loopback capture to the output device).
+        if let Some(at) = self.recapture_at
+            && Instant::now() >= at
+        {
+            self.recapture_at = None;
+            if let Some(audio) = self.audio.as_mut() {
+                match audio.restart() {
+                    Ok(()) => tracing::info!("audio capture restarted on the new output device"),
+                    Err(error) => {
+                        tracing::warn!("audio capture restart: {error}");
+                        self.recapture_at = Some(Instant::now() + RECAPTURE_RETRY);
+                    }
+                }
+            }
+        }
+
         // Wait for the next block of samples (100 ms at most, to stay
         // responsive to the stop signal). No sound: a silent block, so the
         // glow falls back to its floor instead of stopping the engine.
@@ -764,6 +825,15 @@ fn music_delay(settings: &Settings) -> Duration {
     };
     tracing::info!("music delay: {} ms", delay.as_millis());
     delay
+}
+
+/// The delay after the output device changed: a delay chosen by hand wins,
+/// otherwise the automatic one for the new device.
+fn delay_after_output_change(settings: &Settings, change: OutputChange) -> Duration {
+    match settings.music_delay {
+        Some(ms) => Duration::from_millis(ms.into()),
+        None => crate::audio::output::delay_for(change.bluetooth),
+    }
 }
 
 /// What the loop logs: frames per minute and the slowest one, and every
@@ -1046,5 +1116,36 @@ mod tests {
         shape(&mut colors, &mut Vec::new(), &contrast);
         assert!(colors[0].v < 0.4);
         assert_eq!(colors[1].v, RED.v);
+    }
+
+    fn audio_settings(music_delay: Option<u16>) -> Settings {
+        Settings {
+            mode: Mode::Audio,
+            music_delay,
+            ..Settings::default()
+        }
+    }
+
+    #[test]
+    fn bluetooth_output_sets_the_automatic_delay() {
+        let change = OutputChange { bluetooth: true };
+        let delay = delay_after_output_change(&audio_settings(None), change);
+        assert_eq!(delay, crate::audio::output::BLUETOOTH_DELAY);
+    }
+
+    #[test]
+    fn wired_output_clears_the_automatic_delay() {
+        let change = OutputChange { bluetooth: false };
+        assert_eq!(
+            delay_after_output_change(&audio_settings(None), change),
+            Duration::ZERO
+        );
+    }
+
+    #[test]
+    fn a_chosen_delay_wins_over_the_output_change() {
+        let change = OutputChange { bluetooth: true };
+        let delay = delay_after_output_change(&audio_settings(Some(50)), change);
+        assert_eq!(delay, Duration::from_millis(50));
     }
 }

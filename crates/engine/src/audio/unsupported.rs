@@ -24,6 +24,10 @@ impl UnsupportedAudioCapture {
 
     pub fn stop(&mut self) {}
 
+    pub fn restart(&mut self) -> Result<(), AudioError> {
+        Ok(())
+    }
+
     pub fn read_block_timeout(&self, _: Duration) -> Result<Option<Vec<f32>>, AudioError> {
         Ok(None)
     }

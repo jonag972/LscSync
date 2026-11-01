@@ -27,9 +27,10 @@ block2 = "0.6"
 cpal = "0.18"
 
 # Windows: tells whether the sound goes to a Bluetooth device (the version
-# cpal already uses).
+# cpal already uses). windows-core: the `#[implement]` macro names it.
 [target.'cfg(target_os = "windows")'.dependencies]
-windows = { version = "0.62", features = ["Win32_Media_Audio", "Win32_System_Com"] }
+windows = { version = "0.62", features = ["Win32_Foundation", "Win32_Media_Audio", "Win32_System_Com"] }
+windows-core = "0.62"
 
 # Linux: records the default output's monitor through PulseAudio (also served
 # by PipeWire on current distributions).

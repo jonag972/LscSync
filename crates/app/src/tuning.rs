@@ -10,12 +10,6 @@ use rust_i18n::t;
 use crate::theme::*;
 use crate::{MUSIC_VIA_MICROPHONE, Root, display_color};
 
-/// The delay Music mode applies by itself: for a Bluetooth speaker or
-/// headphones, the time their sound takes to come out. Checked once.
-static AUTOMATIC_MUSIC_DELAY: std::sync::LazyLock<u16> = std::sync::LazyLock::new(|| {
-    lscsync_engine::audio::output::automatic_delay().as_millis() as u16
-});
-
 /// Hues offered as swatches, in degrees.
 const SWATCH_HUES: [u16; 9] = [0, 25, 45, 60, 120, 175, 215, 265, 310];
 
@@ -80,7 +74,9 @@ impl Knob {
         }
     }
 
-    fn get(self, settings: &Settings) -> f32 {
+    /// `automatic_delay`: what Music mode applies by itself for the current
+    /// sound output (Bluetooth or not), when the user did not choose one.
+    fn get(self, settings: &Settings, automatic_delay: u16) -> f32 {
         match self {
             Self::Brightness => settings.lum_max as f32,
             Self::Saturation => settings.boost_sat * 10.0,
@@ -94,13 +90,13 @@ impl Knob {
             Self::FrameRate => settings.frame_rate as f32,
             Self::HueSpeed => settings.hue_speed as f32,
             Self::Hue => settings.fixed_hue as f32,
-            Self::MusicDelay => settings.music_delay.unwrap_or(*AUTOMATIC_MUSIC_DELAY) as f32,
+            Self::MusicDelay => settings.music_delay.unwrap_or(automatic_delay) as f32,
             Self::BassLow => settings.music_bass_min_hz as f32,
             Self::BassHigh => settings.music_bass_max_hz as f32,
         }
     }
 
-    fn set(self, settings: &mut Settings, value: f32) {
+    fn set(self, settings: &mut Settings, value: f32, automatic_delay: u16) {
         match self {
             Self::Brightness => settings.lum_max = value.round() as u8,
             Self::Saturation => settings.boost_sat = value / 10.0,
@@ -115,7 +111,7 @@ impl Knob {
             Self::HueSpeed => settings.hue_speed = value.round() as u16,
             // Moving the hue after the white swatch brings the color back.
             Self::Hue => {
-                if (value - self.get(settings)).abs() >= 1.0 {
+                if (value - self.get(settings, automatic_delay)).abs() >= 1.0 {
                     settings.fixed_hue = value.round() as u16;
                     settings.fixed_saturation = 1.0;
                 }
@@ -123,7 +119,7 @@ impl Knob {
             // Every slider is read on each move: the automatic delay only
             // becomes a chosen one when this slider moved.
             Self::MusicDelay => {
-                if (value - self.get(settings)).abs() >= 1.0 {
+                if (value - self.get(settings, automatic_delay)).abs() >= 1.0 {
                     settings.music_delay = Some(value.round() as u16);
                 }
             }
@@ -178,12 +174,16 @@ impl Knob {
 }
 
 /// One slider per knob.
-pub fn sliders(settings: &Settings, cx: &mut Context<Root>) -> Vec<(Knob, Entity<SliderState>)> {
+pub fn sliders(
+    settings: &Settings,
+    automatic_delay: u16,
+    cx: &mut Context<Root>,
+) -> Vec<(Knob, Entity<SliderState>)> {
     Knob::ALL
         .into_iter()
         .map(|knob| {
             let (min, max, step) = knob.range();
-            let value = knob.get(settings).clamp(min, max);
+            let value = knob.get(settings, automatic_delay).clamp(min, max);
             let state = cx.new(|_| {
                 SliderState::new()
                     .min(min)
@@ -200,9 +200,12 @@ impl Root {
     /// Moves the sliders to the profile's settings (after an import, or a
     /// swatch that changed a hue).
     pub(crate) fn sync_sliders(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let automatic_delay = self.automatic_delay;
         for (knob, slider) in &self.sliders {
             let (min, max, _) = knob.range();
-            let value = knob.get(&self.profile.settings).clamp(min, max);
+            let value = knob
+                .get(&self.profile.settings, automatic_delay)
+                .clamp(min, max);
             slider.update(cx, |slider, cx| slider.set_value(value, window, cx));
         }
         self.sliders_stale = false;
@@ -210,8 +213,13 @@ impl Root {
 
     /// Reads the sliders into the settings.
     pub(crate) fn read_sliders(&mut self, cx: &App) {
+        let automatic_delay = self.automatic_delay;
         for (knob, slider) in &self.sliders {
-            knob.set(&mut self.profile.settings, slider_value(slider, cx));
+            knob.set(
+                &mut self.profile.settings,
+                slider_value(slider, cx),
+                automatic_delay,
+            );
         }
     }
 

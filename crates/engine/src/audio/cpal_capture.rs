@@ -81,13 +81,20 @@ impl CpalCapture {
         self.queue = None;
     }
 
+    /// Recaptures on the current default output device (it just changed):
+    /// the loopback stream is tied to that device.
+    pub fn restart(&mut self) -> Result<(), AudioError> {
+        self.stop();
+        self.start()
+    }
+
     /// `Ok(None)`: no block within `timeout` (Windows sends nothing while the
-    /// output is silent). Only a closed queue is an error.
+    /// output is silent), or the capture is stopped while the output device
+    /// switches. Only a closed queue is an error.
     pub fn read_block_timeout(&self, timeout: Duration) -> Result<Option<Vec<f32>>, AudioError> {
-        let queue = self
-            .queue
-            .as_ref()
-            .ok_or_else(|| AudioError::Capture("audio capture not started".to_owned()))?;
+        let Some(queue) = &self.queue else {
+            return Ok(None);
+        };
         match queue.recv_timeout(timeout) {
             Ok(block) => Ok(block),
             Err(Closed) => Err(AudioError::Capture("audio stream interrupted".to_owned())),

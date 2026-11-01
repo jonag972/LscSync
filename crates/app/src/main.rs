@@ -145,6 +145,9 @@ struct Root {
     snapshot: Option<Snapshot>,
     /// Last engine error, kept until the next start.
     error: Option<(ErrorKind, String)>,
+    /// The automatic Music delay for the current sound output (when the
+    /// user did not choose one); follows the output device live.
+    automatic_delay: u16,
     /// One slider per adjustment, shown or not depending on the mode.
     sliders: Vec<(tuning::Knob, Entity<SliderState>)>,
     /// A slider moved and the profile is not saved yet: when it last moved.
@@ -162,7 +165,8 @@ impl Root {
         }
         let settings = &profile.settings;
 
-        let sliders = tuning::sliders(settings, cx);
+        let automatic_delay = lscsync_engine::audio::output::automatic_delay().as_millis() as u16;
+        let sliders = tuning::sliders(settings, automatic_delay, cx);
         let mut subscriptions: Vec<Subscription> = sliders
             .iter()
             .map(|(_, state)| {
@@ -205,6 +209,7 @@ impl Root {
             events: None,
             snapshot: None,
             error: None,
+            automatic_delay,
             sliders,
             unsaved_since: None,
             tray_shown: None,
@@ -279,6 +284,15 @@ impl Root {
                     tracing::error!("engine stopped: {message}");
                     self.error = Some((kind, message));
                     changed = true;
+                }
+                EngineEvent::AutomaticDelay(delay) => {
+                    let ms = delay.as_millis() as u16;
+                    if self.automatic_delay != ms {
+                        self.automatic_delay = ms;
+                        // The delay slider shows the automatic value: move it.
+                        self.sliders_stale = true;
+                        changed = true;
+                    }
                 }
                 EngineEvent::Stopped => {
                     // The engine thread is done: release the handle, otherwise

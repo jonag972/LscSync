@@ -6,6 +6,7 @@
 
 pub mod bass;
 pub mod output;
+pub mod output_watch;
 
 #[cfg(target_os = "macos")]
 pub mod macos;
@@ -61,6 +62,14 @@ impl PlatformAudioCapture {
             Self::System(capture) => capture.stop(),
             Self::Microphone(capture) => capture.stop(),
         }
+    }
+
+    /// Recapture on the new default output device. On macOS the sound is
+    /// captured from the system itself (ScreenCaptureKit) or through a
+    /// virtual loopback device: the output device only matters for the
+    /// delay, not for the capture.
+    pub fn restart(&mut self) -> Result<(), AudioError> {
+        Ok(())
     }
 
     pub fn read_block_timeout(

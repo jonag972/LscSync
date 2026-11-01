@@ -36,6 +36,12 @@ impl LinuxAudioCapture {
         })
     }
 
+    /// Recapture on the new default output: `@DEFAULT_MONITOR@` already
+    /// follows the default sink, nothing to do.
+    pub fn restart(&mut self) -> Result<(), AudioError> {
+        Ok(())
+    }
+
     pub fn start(&mut self) -> Result<(), AudioError> {
         if self.thread.is_some() {
             return Ok(());

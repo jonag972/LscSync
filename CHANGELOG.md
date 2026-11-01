@@ -9,6 +9,23 @@ All notable changes to LscSync are documented here. The format follows
 
 ## [Unreleased]
 
+## [0.2.8] - 2026-11-01
+
+### Added
+
+- Lights with several zones are detected the first time they join a sync:
+  a light that reports the multi-zone scene back gets one color per zone,
+  like the LSC panel kit. Tuya's description of a device doesn't say it.
+- `lscsync-cli describe` prints everything Tuya says about each device of
+  the account, local keys hidden.
+
+### Changed
+
+- The app, the README and the installers talk about lights and zones
+  instead of panels, since LscSync drives any LSC Smart Connect light.
+- Plainer wording: "Click" instead of "Tap", "Done" at the end of setup,
+  "Logs" in Settings, and an up-to-date Linux package description.
+
 ## [0.2.7] - 2026-11-01
 
 ### Changed

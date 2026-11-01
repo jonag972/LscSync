@@ -1,12 +1,15 @@
-//! The screen on the main page: a live capture in a monitor frame, with the
-//! part of the screen each light reflects drawn on it. A selected light's
-//! zones can be moved and resized right there, and a light can be calibrated.
+//! The monitor on the main page, whatever the mode: in the screen modes, a
+//! live capture with the part of the screen each light reflects drawn on it;
+//! in music mode, an equalizer of the sound; in fixed color mode, the color
+//! itself. A selected light's zones can be moved and resized on the capture,
+//! and a light can be calibrated.
 
 use std::sync::Arc;
 
 use gpui_kit::prelude::FluentBuilder as _;
 use gpui_kit::*;
 use lscsync_core::{ColorCommand, Hsv, Mode, Product, Zone};
+use lscsync_engine::audio::bass::EQ_BANDS;
 use lscsync_engine::capture::ScreenCapture;
 use lscsync_engine::tuya::{LscConfig, flip_colors_blocking};
 use rust_i18n::t;
@@ -24,6 +27,10 @@ const SCREEN_WIDTH: f32 = MONITOR_WIDTH - 2.0 * BEZEL;
 const DEFAULT_RATIO: f32 = 9.0 / 16.0;
 /// How long the light flips between two colors before the question.
 const CALIBRATION_FLIPS: std::time::Duration = std::time::Duration::from_secs(4);
+/// Padding inside the monitor frame around the equalizer bars.
+const EQ_PADDING: f32 = 14.0;
+/// Gap between two equalizer bars.
+const EQ_GAP: f32 = 3.0;
 
 /// Small capture of the screen, behind the zones.
 pub struct ScreenPreview {
@@ -181,15 +188,32 @@ impl Root {
         self.preview.as_ref().map_or(DEFAULT_RATIO, |p| p.ratio)
     }
 
-    /// The monitor: the capture in a frame on a small stand, with each
-    /// light's zones on it.
+    /// The monitor: what the current mode is about, in a frame on a small
+    /// stand. The screen modes show the capture with each light's zones on
+    /// it; music mode shows an equalizer; fixed color mode shows the color.
     pub(crate) fn render_screen(&self, cx: &mut Context<Self>) -> Div {
-        let height = SCREEN_WIDTH * self.preview_ratio();
         let mode = self.profile.settings.mode;
-        // The picture only matters when the lights follow it.
-        let picture = match mode {
-            Mode::ScreenZones | Mode::Screen => 0.8,
-            Mode::Audio | Mode::Fixed => 0.25,
+        let height = match mode {
+            Mode::ScreenZones | Mode::Screen => SCREEN_WIDTH * self.preview_ratio(),
+            // Nothing captured to fit: a 16:9 footprint, like an idle preview.
+            Mode::Audio | Mode::Fixed => SCREEN_WIDTH * DEFAULT_RATIO,
+        };
+        let content = match mode {
+            Mode::ScreenZones | Mode::Screen => {
+                let mut picture = div().relative().size_full();
+                if let Some(preview) = self.preview.as_ref() {
+                    picture = picture.child(
+                        img(preview.image.clone())
+                            .absolute()
+                            .inset_0()
+                            .size_full()
+                            .opacity(0.8),
+                    );
+                }
+                picture.children(self.zone_boxes(height, cx))
+            }
+            Mode::Audio => self.render_equalizer(height),
+            Mode::Fixed => self.render_swatch(),
         };
         let screen = div()
             .relative()
@@ -198,16 +222,7 @@ impl Root {
             .rounded(px(5.0))
             .overflow_hidden()
             .bg(rgb(0x14161C))
-            .when_some(self.preview.as_ref(), |screen, preview| {
-                screen.child(
-                    img(preview.image.clone())
-                        .absolute()
-                        .inset_0()
-                        .size_full()
-                        .opacity(picture),
-                )
-            })
-            .children(self.zone_boxes(height, cx))
+            .child(content)
             // A click on the picture, outside any zone, closes the selection.
             .on_mouse_down(
                 MouseButton::Left,
@@ -237,6 +252,59 @@ impl Root {
                     .rounded(px(4.0))
                     .bg(rgb(MONITOR)),
             )
+    }
+
+    /// Music mode, inside the monitor frame: the spectrum bands as bars, in
+    /// the hue the lights are showing right now (the accent when idle).
+    fn render_equalizer(&self, height: f32) -> Div {
+        let bands: &[f32] = self
+            .snapshot
+            .as_ref()
+            .map_or(&[], |snapshot| snapshot.bands.as_slice());
+        // The hue the lights show now: the first live zone color.
+        let hue = self
+            .snapshot
+            .as_ref()
+            .and_then(|snapshot| snapshot.all().next().copied())
+            .map_or(ACCENT_HUE, |color| color.h);
+        let inner = height - 2.0 * EQ_PADDING;
+        div()
+            .relative()
+            .size_full()
+            .flex()
+            .items_end()
+            .gap(px(EQ_GAP))
+            .p(px(EQ_PADDING))
+            .children((0..EQ_BANDS).map(|i| {
+                let level = bands.get(i).copied().unwrap_or(0.0);
+                div()
+                    .flex_1()
+                    .h(px(2.0 + level * inner))
+                    .rounded(px(2.0))
+                    .bg(display_color(Hsv::new(hue, 1.0, level)))
+            }))
+    }
+
+    /// Fixed color mode, inside the monitor frame: the chosen color as a
+    /// swatch, lit from the top.
+    fn render_swatch(&self) -> Div {
+        let settings = &self.profile.settings;
+        let color = self
+            .snapshot
+            .as_ref()
+            .and_then(|snapshot| snapshot.all().next().copied())
+            .unwrap_or(Hsv::new(
+                settings.fixed_hue as f32 / 360.0,
+                settings.fixed_saturation,
+                settings.lum_max as f32 / 100.0,
+            ));
+        let top = display_color(Hsv::new(color.h, color.s, 1.0));
+        let bottom = display_color(Hsv::new(color.h, color.s, 0.55));
+        div().relative().size_full().bg(linear_gradient(
+            180.0,
+            linear_color_stop(top, 0.0),
+            linear_color_stop(bottom, 1.0),
+        ))
     }
 
     /// The zones of every light used in the current mode. In Ambience mode,

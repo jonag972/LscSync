@@ -17,6 +17,8 @@ pub const TEXT_MUTED: u32 = 0x8E8D89;
 pub const TEXT_FAINT: u32 = 0x61605D;
 pub const ACCENT: u32 = 0xE8A838;
 pub const ACCENT_HOVER: u32 = 0xF0B44A;
+/// Hue of the accent, for visuals that idle on the theme's amber.
+pub const ACCENT_HUE: f32 = 38.0 / 360.0;
 pub const ON_ACCENT: u32 = 0x1A1206;
 pub const SUCCESS: u32 = 0x34D399;
 pub const DANGER_BG: u32 = 0x1A1213;

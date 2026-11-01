@@ -6,6 +6,9 @@ use crate::color::Hsv;
 pub struct Snapshot {
     /// Every connected device, with the color of each of its zones.
     pub devices: Vec<DeviceColors>,
+    /// Spectrum band levels (0.0 to 1.0, low to high frequency), music mode
+    /// only: what the app's equalizer shows. Empty in the other modes.
+    pub bands: Vec<f32>,
 }
 
 #[derive(Clone, Debug, PartialEq)]

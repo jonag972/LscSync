@@ -529,7 +529,10 @@ impl Engine {
                 colors: vec![color; link.zones.len().max(1)],
             });
         }
-        Snapshot { devices }
+        Snapshot {
+            devices,
+            ..Default::default()
+        }
     }
 
     fn tick_zones(&mut self) -> Result<Snapshot, EngineError> {
@@ -579,7 +582,10 @@ impl Engine {
             };
             link.frames.send_replace(Some(frame));
         }
-        Ok(Snapshot { devices })
+        Ok(Snapshot {
+            devices,
+            ..Default::default()
+        })
     }
 
     fn tick_color(&mut self) -> Result<Snapshot, EngineError> {
@@ -608,7 +614,10 @@ impl Engine {
                 colors: vec![lamp; link.zones.len().max(1)],
             });
         }
-        Ok(Snapshot { devices })
+        Ok(Snapshot {
+            devices,
+            ..Default::default()
+        })
     }
 
     /// Colors from the sound: reading the block paces the loop.
@@ -644,6 +653,7 @@ impl Engine {
             AudioHue::Fixed => self.settings.audio_fixed_hue as f32 / 360.0,
         };
         let zones = self.bass.process(&samples, hue, self.settings.audio_zones);
+        let bands = self.bass.bands().to_vec();
         let mut frames = Vec::new();
         let mut devices = Vec::new();
         for link in &self.links {
@@ -666,7 +676,7 @@ impl Engine {
         // The lights wait for the sound to come out of the speakers.
         let now = Instant::now();
         self.delayed
-            .push_back((now + self.music_delay, frames, Snapshot { devices }));
+            .push_back((now + self.music_delay, frames, Snapshot { devices, bands }));
         while let Some((due, _, _)) = self.delayed.front()
             && *due <= now
         {

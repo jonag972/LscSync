@@ -9,6 +9,8 @@ All notable changes to LscSync are documented here. The format follows
 
 ## [Unreleased]
 
+## [0.3.0] - 2026-11-01
+
 ### Changed
 
 - Lights with several zones are driven zone by zone, the way the LSC app

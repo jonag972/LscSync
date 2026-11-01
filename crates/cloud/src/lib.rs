@@ -229,6 +229,30 @@ impl Session {
         })
     }
 
+    /// Everything the customer API says about a device, raw, for diagnostics:
+    /// every per-device request Tuya's SDK makes, with its answer or error.
+    pub fn describe(&self, device_id: &str) -> Vec<(String, Result<Value, CloudError>)> {
+        [
+            (
+                "/v1.0/m/life/ha/devices/detail".to_owned(),
+                Some(serde_json::json!({ "devIds": device_id })),
+            ),
+            (format!("/v1.1/m/life/{device_id}/specifications"), None),
+            (format!("/v1.0/m/life/devices/{device_id}/status"), None),
+            (format!("/v1.0/m/life/ha/{device_id}/dp-report-types"), None),
+            (
+                format!("/v1.0/m/life/ha/{device_id}/code/custom-type"),
+                None,
+            ),
+        ]
+        .into_iter()
+        .map(|(path, params)| {
+            let answer = self.get(&path, params);
+            (path, answer)
+        })
+        .collect()
+    }
+
     /// Signed, encrypted GET on the "customer" API; returns the decrypted result.
     fn get(&self, path: &str, params: Option<Value>) -> Result<Value, CloudError> {
         let request_id = random_request_id();

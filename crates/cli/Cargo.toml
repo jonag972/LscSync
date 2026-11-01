@@ -15,10 +15,10 @@ lscsync-platform = { workspace = true }
 lscsync-cloud = { workspace = true }
 qrcode = { workspace = true }
 rustuya = { workspace = true }
+serde_json = { workspace = true }
 tokio = { workspace = true }
 
 [dev-dependencies]
-serde_json = { workspace = true }
 aes-gcm = "0.11"
 hmac = "0.13"
 sha2 = "0.11"

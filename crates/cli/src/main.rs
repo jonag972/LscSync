@@ -23,6 +23,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         Some("audio") => audio(parse_seconds(args.get(1)))?,
         Some("scan") => block_on(scan())?,
         Some("login") => login(args.get(1).map(String::as_str) == Some("--save"))?,
+        Some("describe") => describe()?,
         Some("help" | "--help" | "-h") => usage(),
         _ => {
             println!("LscSync {} (Rust)", env!("CARGO_PKG_VERSION"));
@@ -44,6 +45,7 @@ fn usage() {
     println!("  lscsync-cli audio [sec]   checks the sound capture, no light needed");
     println!("  lscsync-cli scan          lists the Tuya devices on the local network");
     println!("  lscsync-cli login [--save] lists the account's devices via QR login");
+    println!("  lscsync-cli describe      everything Tuya says about each device (QR login)");
 }
 
 fn block_on<F: Future>(future: F) -> F::Output {
@@ -185,8 +187,9 @@ async fn scan() -> Result<(), Box<dyn std::error::Error>> {
     Ok(())
 }
 
-/// QR login with the LSC app; `--save` merges the devices into the profile.
-fn login(save: bool) -> Result<(), Box<dyn std::error::Error>> {
+/// Asks for the user code, shows the QR code and waits for the LSC app to
+/// confirm it.
+fn qr_session() -> Result<lscsync_cloud::Session, Box<dyn std::error::Error>> {
     print!("LSC app user code (Me > Settings > Account and Security > User Code): ");
     std::io::stdout().flush()?;
     let mut user_code = String::new();
@@ -204,16 +207,20 @@ fn login(save: bool) -> Result<(), Box<dyn std::error::Error>> {
     println!("Scan it with the LSC app's scanner, then confirm. Waiting up to 3 min…");
 
     let deadline = Instant::now() + Duration::from_secs(180);
-    let session = loop {
+    loop {
         if let Some(session) = login.poll()? {
-            break session;
+            return Ok(session);
         }
         if Instant::now() > deadline {
             return Err("timed out waiting for the scan".into());
         }
         std::thread::sleep(Duration::from_secs(2));
-    };
+    }
+}
 
+/// QR login with the LSC app; `--save` merges the devices into the profile.
+fn login(save: bool) -> Result<(), Box<dyn std::error::Error>> {
+    let session = qr_session()?;
     let devices = session.devices()?;
     println!("\n{} device(s):", devices.len());
     for device in &devices {
@@ -241,6 +248,134 @@ fn login(save: bool) -> Result<(), Box<dyn std::error::Error>> {
         println!("saved to {}", profile_path().display());
     }
     Ok(())
+}
+
+/// Codes of Tuya's RGBIC light strip standard: a device with them drives
+/// several segments (DP 51 scene, DP 61 per-segment color, DP 47 count).
+const MULTI_ZONE_CODES: [&str; 5] = [
+    "dreamlight_scene_mode",
+    "dreamlightmic_music_data",
+    "paint_colour_data",
+    "light_pixel",
+    "lightpixel_number_set",
+];
+
+/// QR login, then everything Tuya says about each device of the account: a
+/// summary of its data points, then the raw answers. Local keys are hidden.
+fn describe() -> Result<(), Box<dyn std::error::Error>> {
+    let session = qr_session()?;
+    let devices = session.devices()?;
+    println!("\n{} device(s)", devices.len());
+
+    for device in &devices {
+        println!(
+            "\n=== {} [{} · {}] id: {}",
+            device.name, device.product_name, device.category, device.id
+        );
+        let answers: Vec<(String, Option<serde_json::Value>)> = session
+            .describe(&device.id)
+            .into_iter()
+            .map(|(path, answer)| match answer {
+                Ok(mut value) => {
+                    hide_keys(&mut value);
+                    (path, Some(value))
+                }
+                Err(error) => {
+                    println!("{path}: {error}");
+                    (path, None)
+                }
+            })
+            .collect();
+        let answer = |suffix: &str| {
+            answers
+                .iter()
+                .find(|(path, _)| path.ends_with(suffix))
+                .and_then(|(_, value)| value.as_ref())
+        };
+
+        let mut codes: Vec<String> = Vec::new();
+        if let Some(status) = answer("/status") {
+            println!(
+                "product key: {}",
+                status["productKey"].as_str().unwrap_or("?")
+            );
+            println!("data points:");
+            for point in status["dpStatusRelationDTOS"]
+                .as_array()
+                .into_iter()
+                .flatten()
+            {
+                let code = point["dpCode"]
+                    .as_str()
+                    .or(point["statusCode"].as_str())
+                    .unwrap_or("?");
+                println!(
+                    "  DP {:>3}  {code}  ({}, local: {})",
+                    point["dpId"], point["valueType"], point["supportLocal"]
+                );
+                codes.push(code.to_owned());
+            }
+        }
+        if let Some(specification) = answer("/specifications") {
+            let functions: Vec<&str> = ["functions", "status"]
+                .iter()
+                .flat_map(|list| specification[*list].as_array().into_iter().flatten())
+                .filter_map(|function| function["code"].as_str())
+                .collect();
+            println!("standard functions: {}", functions.join(", "));
+            codes.extend(functions.iter().map(|code| (*code).to_owned()));
+        }
+        if let Some(detail) = answer("/devices/detail") {
+            let values: Vec<String> = detail
+                .as_array()
+                .into_iter()
+                .flatten()
+                .flat_map(|item| item["status"].as_array().into_iter().flatten())
+                .map(|status| {
+                    format!(
+                        "{}={}",
+                        status["code"].as_str().unwrap_or("?"),
+                        status["value"]
+                    )
+                })
+                .collect();
+            println!("current values: {}", values.join(", "));
+        }
+        let multi_zone: Vec<&str> = MULTI_ZONE_CODES
+            .into_iter()
+            .filter(|code| codes.iter().any(|known| known == code))
+            .collect();
+        if multi_zone.is_empty() {
+            println!("multi-zone: no sign of it in Tuya's answers");
+        } else {
+            println!("multi-zone: yes ({})", multi_zone.join(", "));
+        }
+
+        println!("--- raw answers");
+        for (path, value) in &answers {
+            if let Some(value) = value {
+                println!("{path}:\n{}", serde_json::to_string_pretty(value)?);
+            }
+        }
+    }
+    Ok(())
+}
+
+/// Replaces local keys anywhere in a Tuya answer, so the output can be shared.
+fn hide_keys(value: &mut serde_json::Value) {
+    match value {
+        serde_json::Value::Object(map) => {
+            for (name, value) in map.iter_mut() {
+                if name.eq_ignore_ascii_case("local_key") || name.eq_ignore_ascii_case("localKey") {
+                    *value = serde_json::Value::String("(hidden)".to_owned());
+                } else {
+                    hide_keys(value);
+                }
+            }
+        }
+        serde_json::Value::Array(items) => items.iter_mut().for_each(hide_keys),
+        _ => {}
+    }
 }
 
 fn run(seconds: u64) -> Result<(), Box<dyn std::error::Error>> {

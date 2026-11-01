@@ -1,4 +1,4 @@
-//! Main window: the panels' light is the only color in the app.
+//! Main window: the lights' color is the only color in the app.
 
 // Windows: a GUI app, without a console window. Debug builds keep the console
 // for the logs.
@@ -334,7 +334,7 @@ impl Root {
         } = shown;
         let status = match phase {
             Phase::Idle => t!("status.paused").to_string(),
-            Phase::Connecting => t!("status.connecting_panels").to_string(),
+            Phase::Connecting => t!("status.connecting_lights").to_string(),
             Phase::Running => t!("status.synced_mode", mode = mode_label(mode)).to_string(),
             Phase::Failed => self.describe_error().0,
         };
@@ -452,7 +452,7 @@ impl Root {
         }
     }
 
-    /// On quit: give the engine time to set the panels back to white.
+    /// On quit: give the engine time to set the lights back to white.
     fn shutdown(&mut self) {
         if self.unsaved_since.take().is_some() {
             self.save();
@@ -598,7 +598,7 @@ fn load_profile() -> Profile {
     profile
 }
 
-/// Preview color: same hue as the panels, lightened so it stays readable on
+/// Preview color: same hue as the lights, lightened so it stays readable on
 /// screen even when the brightness sent is low.
 fn display_color(color: Hsv) -> Rgba {
     let c = Hsv::new(color.h, color.s, 0.3 + 0.7 * color.v.clamp(0.0, 1.0)).to_rgb();
@@ -727,7 +727,7 @@ fn tray_menu(cx: &mut App) -> Vec<MenuItem> {
 }
 
 /// Hand-drawn glyph: a screen with three rays of light above it (the
-/// panels). The rays fade while the sync is paused.
+/// lights). The rays fade while the sync is paused.
 ///
 /// macOS: monochrome template image, tinted by the system to match the menu
 /// bar (light, dark, selected). Windows: amber glyph, readable on both light

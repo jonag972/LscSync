@@ -89,10 +89,10 @@ pub fn dp_music(color: Hsv) -> String {
 /// shows them), the 6 panels of the kit being segments 1 to 6.
 pub const SCENE_SEGMENTS: usize = 12;
 
-/// DP 51 value giving each panel its own color, applied instantly: color
-/// `i` goes to panel `i + 1`. A single brightness for the whole scene, that
-/// of the brightest panel.
-pub fn dp_scene_panels(colors: &[Hsv]) -> String {
+/// DP 51 value giving each zone its own color, applied instantly: color
+/// `i` goes to segment `i + 1`. A single brightness for the whole scene,
+/// that of the brightest zone.
+pub fn dp_scene_segments(colors: &[Hsv]) -> String {
     let max_v = colors.iter().map(|c| c.v).fold(0.0_f32, f32::max);
     let luminosity = ((max_v as f64 * 100.0).round() as i64).clamp(1, 100) as u8;
     let mut bytes = vec![
@@ -106,7 +106,7 @@ pub fn dp_scene_panels(colors: &[Hsv]) -> String {
         0x00,
         luminosity,
     ];
-    // Segments past the last panel repeat the colors: they light nothing.
+    // Segments past the last zone repeat the colors: they light nothing.
     for color in colors.iter().cycle().take(SCENE_SEGMENTS) {
         let hue = ((color.h as f64 * 360.0).round() as i64).rem_euclid(360) as u16;
         let saturation = ((color.s as f64 * 100.0).round() as i64).clamp(0, 100) as u8;
@@ -195,14 +195,14 @@ mod tests {
     }
 
     #[test]
-    fn panel_scene_has_12_segments() {
+    fn segment_scene_has_12_segments() {
         let bytes = STANDARD
-            .decode(dp_scene_panels(&[RED, GREEN, BLUE, RED, GREEN, BLUE]))
+            .decode(dp_scene_segments(&[RED, GREEN, BLUE, RED, GREEN, BLUE]))
             .expect("valid base64");
         assert_eq!(bytes.len(), 9 + 12 * 3);
         assert_eq!(bytes[8], 100);
         assert_eq!(
-            hues(&dp_scene_panels(&[RED, GREEN, BLUE, RED, GREEN, BLUE]))[..7],
+            hues(&dp_scene_segments(&[RED, GREEN, BLUE, RED, GREEN, BLUE]))[..7],
             [0, 120, 240, 0, 120, 240, 0]
         );
     }

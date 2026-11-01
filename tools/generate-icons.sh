@@ -51,7 +51,7 @@ open(sys.argv[2], "w").write(f'''<svg xmlns="http://www.w3.org/2000/svg" width="
 <rect width="1280" height="640" fill="#0B0B0D"/>
 <image href="data:image/png;base64,{icon}" x="120" y="120" width="400" height="400"/>
 <text x="560" y="300" fill="#F2F1EF" font-family="Helvetica Neue, Arial" font-size="84" font-weight="600">LscSync</text>
-<text x="562" y="370" fill="#8E8D89" font-family="Helvetica Neue, Arial" font-size="27">Your LSC panels follow your screen and your music</text>
+<text x="562" y="370" fill="#8E8D89" font-family="Helvetica Neue, Arial" font-size="27">Your LSC lights follow your screen and your music</text>
 <rect x="562" y="410" width="72" height="8" rx="4" fill="#D9662B"/><rect x="646" y="410" width="72" height="8" rx="4" fill="#7A4FD0"/><rect x="730" y="410" width="72" height="8" rx="4" fill="#1FA38A"/>
 </svg>''')
 EOF

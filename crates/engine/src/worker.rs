@@ -641,7 +641,7 @@ impl Engine {
                 colors: lamp.clone(),
             });
             let frame = match link.product {
-                Product::Panels => Frame::Zones(lamp),
+                Product::MultiZone => Frame::Zones(lamp),
                 Product::Light => Frame::Color(lamp.first().copied().unwrap_or_default()),
             };
             link.frames.send_replace(Some(frame));
@@ -746,11 +746,11 @@ impl Engine {
             let count = link.zones.len().max(1);
             let (colors, frame) = match (link.product, self.settings.music_style) {
                 // Through the instant DP 51 scene: what the bass needs.
-                (Product::Panels, MusicStyle::Pulse) => {
+                (Product::MultiZone, MusicStyle::Pulse) => {
                     let colors = vec![pulse; count];
                     (colors.clone(), Frame::Zones(colors))
                 }
-                (Product::Panels, MusicStyle::Level) => {
+                (Product::MultiZone, MusicStyle::Level) => {
                     let colors = meter(self.bass.volume(), count, lit, self.settings.invert_zones);
                     (colors.clone(), Frame::Zones(colors))
                 }
@@ -878,7 +878,7 @@ impl Stats {
 
 /// The music meter: as many zones lit as `volume` (0.0 to 1.0) of `count`,
 /// from the first zone (the last one with `invert`). The others are off
-/// (v = 0); the scene can't turn a single panel off, so the panels show them
+/// (v = 0); the scene can't turn a single zone off, so the lights show them
 /// white (saturation 0), and the app's preview dark.
 fn meter(volume: f32, count: usize, lit: Hsv, invert: bool) -> Vec<Hsv> {
     let on = ((volume * count as f32).round() as usize).min(count);
@@ -989,7 +989,7 @@ async fn drive(
             continue;
         };
         let result = match (&frame, product) {
-            (Frame::Zones(colors), Product::Panels) => {
+            (Frame::Zones(colors), Product::MultiZone) => {
                 last_single = None;
                 let unchanged = last_zones.as_ref().is_some_and(|last: &Vec<Hsv>| {
                     last.len() == colors.len()
@@ -999,7 +999,7 @@ async fn drive(
                     Ok(())
                 } else {
                     last_zones = Some(colors.clone());
-                    lsc.send_scene_panels(colors).await
+                    lsc.send_scene_segments(colors).await
                 }
             }
             _ => {
@@ -1013,7 +1013,7 @@ async fn drive(
                 } else {
                     last_single = Some(color);
                     match (product, command) {
-                        (Product::Panels, _) | (Product::Light, ColorCommand::Direct) => {
+                        (Product::MultiZone, _) | (Product::Light, ColorCommand::Direct) => {
                             lsc.send_direct(color).await
                         }
                         (Product::Light, ColorCommand::Fade) => {
@@ -1074,7 +1074,7 @@ mod tests {
             [false, false, false, true, true, true]
         );
         assert_eq!(lit(&meter(1.0, 6, RED, false)), [true; 6]);
-        // Off zones are white on the panels: no saturation.
+        // Off zones are white on the lights: no saturation.
         assert_eq!(meter(0.0, 3, RED, false)[0].s, 0.0);
     }
 

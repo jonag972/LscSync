@@ -111,15 +111,15 @@ pub enum ColorCommand {
 }
 
 /// Tuya's product key of the LSC light panel kit.
-const PANELS_PRODUCT_KEY: &str = "duxmr5beo0hrowle";
+const PANEL_KIT_PRODUCT_KEY: &str = "duxmr5beo0hrowle";
 
 /// How a device is driven, from what is known about its product.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Product {
-    /// LSC light panel kit: one color per panel, applied instantly (a
-    /// 12-segment DP 51 scene, so up to 12 panels; 6 in the kit), and an
-    /// instant single color (DP 27).
-    Panels,
+    /// The LSC panel kit: several zones, one color each, applied instantly
+    /// (a 12-segment DP 51 scene, so up to 12 zones), and an instant single
+    /// color (DP 27).
+    MultiZone,
     /// Any other light: one color (DP 24).
     Light,
 }
@@ -129,38 +129,38 @@ impl Product {
     /// added before the app fetched it.
     pub fn of(device: &Device) -> Self {
         let key = device.capabilities.as_ref().map(|c| c.product_key.as_str());
-        if key == Some(PANELS_PRODUCT_KEY)
+        if key == Some(PANEL_KIT_PRODUCT_KEY)
             || device
                 .product
                 .trim()
                 .eq_ignore_ascii_case("Smart panel lights")
         {
-            Self::Panels
+            Self::MultiZone
         } else {
             Self::Light
         }
     }
 
-    /// How many zones the device can have: one per panel for the panels.
+    /// How many zones the device can have.
     pub fn zone_counts(self) -> RangeInclusive<usize> {
         match self {
-            Self::Panels => 1..=crate::protocol::SCENE_SEGMENTS,
+            Self::MultiZone => 1..=crate::protocol::SCENE_SEGMENTS,
             Self::Light => 1..=1,
         }
     }
 
     pub fn default_zone_count(self) -> usize {
         match self {
-            Self::Panels => 6,
+            Self::MultiZone => 6,
             Self::Light => 1,
         }
     }
 
-    /// Starting layout: the panels along the top of the screen, a light on
-    /// the whole screen (its dominant color).
+    /// Starting layout: the zones along the top of the screen, a single
+    /// zone on the whole screen (its dominant color).
     pub fn default_zones(self, top_height: f32) -> Vec<Zone> {
         match self {
-            Self::Panels => top_row(self.default_zone_count(), top_height),
+            Self::MultiZone => top_row(self.default_zone_count(), top_height),
             Self::Light => vec![Zone::WHOLE_SCREEN],
         }
     }
@@ -181,7 +181,7 @@ impl Device {
     /// Ways to send the device a single color, best first: the instant one
     /// when Tuya says it has the music function, the fading one in any case.
     pub fn color_commands(&self) -> Vec<ColorCommand> {
-        let direct = Product::of(self) == Product::Panels
+        let direct = Product::of(self) == Product::MultiZone
             || self
                 .capabilities
                 .as_ref()
@@ -231,7 +231,7 @@ mod tests {
     }
 
     #[test]
-    fn changing_the_panel_count_keeps_placed_zones() {
+    fn changing_the_zone_count_keeps_placed_zones() {
         let mut device: Device = serde_json::from_str(
             r#"{"id": "a", "name": "Panels", "local_key": "k", "product": "Smart panel lights"}"#,
         )

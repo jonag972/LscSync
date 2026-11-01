@@ -4,7 +4,7 @@ version.workspace = true
 edition.workspace = true
 license.workspace = true
 repository.workspace = true
-description = "LSC Smart Connect panels that follow your screen and your music"
+description = "LSC Smart Connect lights that follow your screen and your music"
 
 [[bin]]
 name = "lscsync"
@@ -47,9 +47,8 @@ maintainer = "Jonathan Gromat <128492963+jonag972@users.noreply.github.com>"
 copyright = "2026 Jonathan Gromat"
 section = "utils"
 extended-description = """\
-Syncs LSC Smart Connect (Tuya) light panels with the screen (Ambilight, \
-3 zones), a single dominant color, or the music, entirely over the local \
-network."""
+Syncs LSC Smart Connect (Tuya) lights with your screen, its dominant \
+color or your music, over the local network only."""
 # The GPU renderer loads Vulkan at runtime, which $auto cannot see.
 depends = "$auto, libvulkan1"
 assets = [

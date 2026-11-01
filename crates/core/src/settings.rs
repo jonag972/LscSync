@@ -32,14 +32,14 @@ pub enum AudioHue {
     Fixed,
 }
 
-/// What the panels show in music mode.
+/// What multi-zone lights show in music mode.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum MusicStyle {
-    /// Every panel pulses with the bass.
+    /// Every zone pulses with the bass.
     #[default]
     Pulse,
-    /// A meter: as many panels lit as the sound is loud.
+    /// A meter: as many zones lit as the sound is loud.
     Level,
 }
 

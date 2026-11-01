@@ -449,7 +449,7 @@ impl Root {
         boxes
     }
 
-    /// Under the screen when a light is selected: its name, how many panels
+    /// Under the screen when a light is selected: its name, how many zones
     /// it has, calibration, back to its default zones.
     pub(crate) fn render_light_bar(&self, id: &str, cx: &mut Context<Self>) -> Option<Div> {
         let (index, device) = self
@@ -496,7 +496,7 @@ impl Root {
                     .items_center()
                     .gap(px(8.0))
                     .text_color(rgb(TEXT_MUTED))
-                    .child(t!("zones.panels").to_string())
+                    .child(t!("zones.count").to_string())
                     .child(stepper(count, counts, cx, move |this, count, cx| {
                         this.set_zone_count(&count_id, count);
                         cx.notify();

@@ -21,8 +21,8 @@ pub struct LscConfig {
     pub device_id: String,
     pub local_key: String,
     pub ip: String,
-    /// TCP port of the controller (6668 for real panels). Tests point it at a
-    /// fake panel on another port.
+    /// TCP port of the controller (6668 for real lights). Tests point it at a
+    /// fake light on another port.
     pub port: u16,
 }
 
@@ -163,7 +163,7 @@ impl Lsc {
         Ok(())
     }
 
-    /// Single color for all panels (DP 24).
+    /// Single color for the whole light (DP 24).
     pub async fn send_color(&self, color: Hsv) -> Result<(), LscError> {
         self.ensure_power().await?;
         self.ensure_mode(MODE_COLOR, protocol::MODE_COLOR).await?;
@@ -183,12 +183,12 @@ impl Lsc {
         Ok(())
     }
 
-    /// One color per panel, applied instantly (DP 51, 12-segment scene).
-    pub async fn send_scene_panels(&self, colors: &[Hsv]) -> Result<(), LscError> {
+    /// One color per zone, applied instantly (DP 51, 12-segment scene).
+    pub async fn send_scene_segments(&self, colors: &[Hsv]) -> Result<(), LscError> {
         self.ensure_power().await?;
         self.ensure_mode(MODE_SCENE, protocol::MODE_SCENE).await?;
         self.device
-            .set_value(protocol::DP_SCENE, protocol::dp_scene_panels(colors))
+            .set_value(protocol::DP_SCENE, protocol::dp_scene_segments(colors))
             .await?;
         Ok(())
     }

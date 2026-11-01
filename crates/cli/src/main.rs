@@ -36,12 +36,12 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
 fn usage() {
     println!("usage:");
-    println!("  lscsync-cli status        checks the connection to the panels");
-    println!("  lscsync-cli white         sets the panels back to white");
+    println!("  lscsync-cli status        checks the connection to the light");
+    println!("  lscsync-cli white         sets the light back to white");
     println!("  lscsync-cli pattern       red / green / blue on the 3 zones, then white");
     println!("  lscsync-cli preview       prints the captured colors, sends nothing");
     println!("  lscsync-cli run [sec]     live sync of the synced devices (15 s by default)");
-    println!("  lscsync-cli audio [sec]   checks the sound capture, no panels needed");
+    println!("  lscsync-cli audio [sec]   checks the sound capture, no light needed");
     println!("  lscsync-cli scan          lists the Tuya devices on the local network");
     println!("  lscsync-cli login [--save] lists the account's devices via QR login");
 }

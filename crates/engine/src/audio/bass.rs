@@ -1,6 +1,6 @@
 //! Bass detection by FFT: the peak of the bass band (20-250 Hz by default)
 //! becomes the brightness, while the hue cycles or stays fixed. The overall
-//! volume (RMS) is measured too, for the panel meter.
+//! volume (RMS) is measured too, for the zone meter.
 //!
 //! Fast attack / 8× slower release, a reference peak that decays over 1-2 s,
 //! and an adjustable brightness floor.
@@ -19,7 +19,7 @@ use super::{BLOCK_SIZE, SAMPLE_RATE};
 const BASS_MIN_HZ: f32 = 10.0;
 
 /// RMS under which the sound counts as silence for the meter (about
-/// -50 dBFS): background noise must not light a panel.
+/// -50 dBFS): background noise must not light a zone.
 const VOLUME_FLOOR: f32 = 0.003;
 
 /// Decay of the reference peak (~1-2 s to fall back to silence).
@@ -206,7 +206,7 @@ impl BassProcessor {
         current * (1.0 - alpha) + target * alpha
     }
 
-    /// Processes a block of samples and returns the color every panel
+    /// Processes a block of samples and returns the color every zone
     /// pulses with. The volume for [`Self::volume`] is updated too.
     ///
     /// `hue`: the hue to apply (computed by the caller from the cycling or
@@ -225,7 +225,7 @@ impl BassProcessor {
         Hsv::new(hue, 1.0, value)
     }
 
-    /// Smoothed overall volume, 0.0 to 1.0: how full the panel meter is.
+    /// Smoothed overall volume, 0.0 to 1.0: how full the zone meter is.
     pub fn volume(&self) -> f32 {
         self.volume
     }

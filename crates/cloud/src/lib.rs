@@ -197,7 +197,7 @@ impl Session {
 
     /// What a device can do: its product key, the codes of its standard
     /// functions, and their DP ids on the local network. Tuya describes only
-    /// standard functions (the panels' DP 51 is missing, for instance).
+    /// standard functions (the panel kit's DP 51 is missing, for instance).
     pub fn capabilities(&self, device_id: &str) -> Result<lscsync_core::Capabilities, CloudError> {
         let specification = self.get(&format!("/v1.1/m/life/{device_id}/specifications"), None)?;
         let points = self.get(&format!("/v1.0/m/life/devices/{device_id}/status"), None)?;

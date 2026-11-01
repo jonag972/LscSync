@@ -104,7 +104,7 @@ impl Image {
         }
     }
 
-    /// Top band: the panels sit above the screen.
+    /// Top band: lights usually sit above the screen.
     pub fn top_band(&self, fraction: f32) -> Self {
         if self.height == 0 {
             return self.clone();

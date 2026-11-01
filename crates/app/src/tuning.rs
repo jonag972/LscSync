@@ -429,8 +429,8 @@ impl Root {
         rows
     }
 
-    /// Music mode: every panel pulses with the bass, or a meter of the
-    /// volume lights as many panels as the sound is loud.
+    /// Music mode: every zone pulses with the bass, or a meter of the
+    /// volume lights as many zones as the sound is loud.
     fn render_music_style(&self, cx: &mut Context<Self>) -> Div {
         let style = self.profile.settings.music_style;
         let option = |id: &'static str, key: &str, value: MusicStyle, cx: &mut Context<Self>| {

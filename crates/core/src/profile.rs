@@ -119,7 +119,7 @@ impl Profile {
             profile.sync_device = Some(legacy.device_id.clone());
             profile.devices.push(Device {
                 id: legacy.device_id,
-                name: "LSC panels".to_owned(),
+                name: "LSC lights".to_owned(),
                 local_key: legacy.local_key,
                 ip: legacy.ip,
                 product: String::new(),

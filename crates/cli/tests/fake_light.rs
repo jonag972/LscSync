@@ -1,4 +1,4 @@
-//! Integration test: a fake LSC panel on loopback speaks the Tuya v3.5 local
+//! Integration test: a fake LSC light on loopback speaks the Tuya v3.5 local
 //! protocol (6699 frames, AES-128-GCM, session-key handshake) and checks the
 //! DP commands `Lsc` sends: power, mode, color, music and scene.
 
@@ -17,8 +17,8 @@ use lscsync_engine::tuya::{Lsc, LscConfig};
 
 const LOCAL_KEY: &[u8; 16] = b"0123456789abcdef";
 const DEVICE_ID: &str = "bf0123456789abcdef0123";
-/// A port nothing else uses, so the test never collides with a real panel.
-const PANEL_PORT: u16 = 16668;
+/// A port nothing else uses, so the test never collides with a real light.
+const LIGHT_PORT: u16 = 16668;
 
 const CMD_SESS_KEY_NEG_START: u32 = 0x03;
 const CMD_SESS_KEY_NEG_RESP: u32 = 0x04;
@@ -93,13 +93,13 @@ async fn read_message(
     }
 }
 
-/// The fake panel: answers the session-key handshake, then records every dps
+/// The fake light: answers the session-key handshake, then records every dps
 /// object the client sends until the connection closes.
-async fn fake_panel(
+async fn fake_light(
     listener: TcpListener,
     dps_tx: tokio::sync::mpsc::UnboundedSender<serde_json::Value>,
 ) {
-    let (mut stream, _) = listener.accept().await.expect("accept panel connection");
+    let (mut stream, _) = listener.accept().await.expect("accept light connection");
     let mut buf: Vec<u8> = Vec::new();
 
     // Handshake step 1: the client's 16-byte nonce (session-key commands carry
@@ -166,33 +166,33 @@ async fn fake_panel(
 }
 
 #[tokio::test]
-async fn lsc_sends_the_expected_dp_commands_to_a_v3_5_panel() {
-    let listener = TcpListener::bind(("127.0.0.1", PANEL_PORT))
+async fn lsc_sends_the_expected_dp_commands_to_a_v3_5_light() {
+    let listener = TcpListener::bind(("127.0.0.1", LIGHT_PORT))
         .await
-        .expect("bind the fake panel");
+        .expect("bind the fake light");
     let (dps_tx, mut dps_rx) = tokio::sync::mpsc::unbounded_channel();
-    let panel = tokio::spawn(fake_panel(listener, dps_tx));
+    let light = tokio::spawn(fake_light(listener, dps_tx));
 
     let config = LscConfig {
         device_id: DEVICE_ID.to_string(),
         local_key: String::from_utf8(LOCAL_KEY.to_vec()).unwrap(),
         ip: "127.0.0.1".to_string(),
-        port: PANEL_PORT,
+        port: LIGHT_PORT,
     };
     let lsc = Lsc::connect(&config, Duration::from_secs(10))
         .await
-        .expect("connect to the fake panel");
+        .expect("connect to the fake light");
 
     let red = Hsv::new(0.0, 1.0, 1.0);
     let blue = Hsv::new(2.0 / 3.0, 1.0, 1.0);
-    let panels = [red, red, blue, blue, red, blue];
+    let zones = [red, red, blue, blue, red, blue];
     lsc.send_color(red).await.expect("send color");
     lsc.send_direct(blue).await.expect("send direct color");
-    lsc.send_scene_panels(&panels).await.expect("send scene");
+    lsc.send_scene_segments(&zones).await.expect("send scene");
     lsc.restore_white().await.expect("restore white");
     lsc.close().await;
 
-    panel.await.expect("fake panel failed");
+    light.await.expect("fake light failed");
     let mut received = Vec::new();
     while let Some(dps) = dps_rx.recv().await {
         received.push(dps);
@@ -213,7 +213,7 @@ async fn lsc_sends_the_expected_dp_commands_to_a_v3_5_panel() {
         (protocol::DP_MODE, serde_json::json!(protocol::MODE_SCENE)),
         (
             protocol::DP_SCENE,
-            serde_json::json!(protocol::dp_scene_panels(&panels)),
+            serde_json::json!(protocol::dp_scene_segments(&zones)),
         ),
         (protocol::DP_MODE, serde_json::json!(protocol::MODE_WHITE)),
     ];

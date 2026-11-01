@@ -4,7 +4,7 @@ _version: 1
 status:
   paused: "En pause"
   connecting: "Connexion…"
-  connecting_panels: "Connexion aux panneaux…"
+  connecting_lights: "Connexion à tes lumières…"
   synced_mode: "Synchronisé · %{mode}"
   error: "Erreur"
   tooltip: "LscSync — %{status}"
@@ -41,7 +41,7 @@ tuning:
   music_color: "Couleur"
   hue: "Teinte"
   hue_speed: "Défilement"
-  music_style: "Panneaux"
+  music_style: "Zones"
   music_pulse: "Pulsation"
   music_level: "Niveau"
   bass_low: "Basses à partir de"
@@ -69,17 +69,17 @@ footer:
 
 error:
   not_configured_title: "Aucun appareil configuré"
-  not_configured_body: "Connecte tes appareils LSC pour démarrer."
-  unreachable_title: "Panneaux injoignables"
-  unreachable_body: "Pas de réponse de %{ip} en 10 s. Vérifie qu'ils sont allumés et sur le même réseau."
+  not_configured_body: "Connecte tes lumières LSC pour démarrer."
+  unreachable_title: "Lumière injoignable"
+  unreachable_body: "Pas de réponse de %{ip} en 10 s. Vérifie qu'elle est allumée et sur le même réseau."
   screen_title: "Capture d'écran impossible"
   screen_permission: "Autorise LscSync dans Réglages Système › Confidentialité et sécurité › Enregistrement de l'écran et de l'audio système."
   sound_title: "Son indisponible"
   sound_unsupported: "Le mode Musique n'est pas encore disponible sur ce système."
   microphone_title: "Micro inaccessible"
   microphone_permission: "Autorise LscSync dans Réglages Système › Confidentialité et sécurité › Micro."
-  device_title: "Connexion refusée par les panneaux"
-  device_body: "Leur clé a peut-être changé : reconnecte tes appareils."
+  device_title: "Connexion refusée par une lumière"
+  device_body: "Sa clé a peut-être changé : reconnecte tes appareils."
   other_title: "Une erreur est survenue"
 
 menu:
@@ -97,7 +97,7 @@ menu:
 
 setup:
   welcome_title: "Bienvenue dans LscSync"
-  welcome_body: "Connecte tes appareils LSC Smart Connect en une minute, avec l'app LSC de ton téléphone."
+  welcome_body: "Connecte tes appareils LSC Smart Connect avec l'app LSC de ton téléphone."
   connect: "Connecter mes appareils"
   import: "Importer un profil"
   step_1: "ÉTAPE 1 SUR 2"
@@ -121,7 +121,7 @@ setup:
   found_many: "%{count} appareils sur ton compte"
   found_none_body: "Ajoute d'abord tes appareils dans l'app LSC Smart Connect, puis réessaie."
   found_body: "Choisis l'appareil qui suit ton écran. Les clés restent sur cet ordinateur."
-  done: "C'est parti"
+  done: "Terminé"
   error_network: "Pas de connexion à Internet : vérifie ta connexion et réessaie."
   error_refused: "Code utilisateur refusé : vérifie-le dans l'app LSC Smart Connect."
   error_response: "Réponse inattendue de Tuya, réessaie dans un instant."
@@ -132,7 +132,7 @@ device:
 
 devices:
   title: "Mes lumières"
-  hint: "Touche une lumière pour la placer sur l'écran."
+  hint: "Clique sur une lumière pour la placer sur l'écran."
   rescan: "Rechercher sur le réseau"
   scanning: "Recherche en cours…"
   reconnect: "Reconnecter mon compte LSC"
@@ -170,7 +170,7 @@ settings:
   about_heading: "À PROPOS"
   source: "Code source et aide"
   license: "Projet indépendant, licence MIT"
-  logs: "Ce qui s'est passé (journaux)"
+  logs: "Journaux"
   open_logs: "Ouvrir"
 
 update:
@@ -184,7 +184,7 @@ update:
 zones:
   hint_running: "Glisse une zone pour la déplacer, tire son coin pour la redimensionner. La zone choisie s'allume en blanc."
   hint_stopped: "Glisse une zone pour la déplacer, tire son coin pour la redimensionner."
-  panels: "Panneaux"
+  count: "Zones"
   reset: "Par défaut"
 
 calibrate:
@@ -198,7 +198,7 @@ calibrate:
   failed: "La lumière n'a pas répondu. Vérifie qu'elle est allumée."
 
 home:
-  screen: "Chaque lumière suit sa partie de l'écran. Touche une lumière pour la placer."
+  screen: "Chaque lumière suit sa partie de l'écran. Clique sur une lumière pour la placer."
   ambience: "Tes lumières prennent la couleur dominante du haut de l'écran."
   music: "Tes lumières pulsent sur les basses de ce qui joue."
   color: "Tes lumières restent sur la couleur que tu choisis."

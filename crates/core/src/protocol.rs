@@ -22,6 +22,7 @@ pub const DP_WHITE_BRIGHTNESS: &str = "22";
 pub const DP_COLOR: &str = "24";
 pub const DP_SCENE: &str = "51";
 pub const DP_MUSIC: &str = "27";
+pub const DP_PAINT: &str = "61";
 
 pub const MODE_WHITE: &str = "white";
 pub const MODE_COLOR: &str = "colour";
@@ -36,6 +37,11 @@ const SCENE_STATIC: u8 = 0x00;
 const SCENE_SPEED: u8 = 0x32;
 const SCENE_SPLIT: u8 = 0x80;
 const COLORS_PER_SCENE: usize = 6;
+
+const PAINT_COLOUR: u8 = 0x01;
+const PAINT_INSTANT: u8 = 0x01;
+const PAINT_PENCIL: u8 = 0x01;
+const PAINT_ERASER: u8 = 0x02;
 
 /// What a light showed, as far as its status says: on or off, the mode and
 /// the white brightness. Its colors can't be read back.
@@ -66,6 +72,41 @@ pub fn parse_status(payload: &[u8]) -> Option<LightState> {
         // On, mode unknown.
         (Some(true), None) => Some(LightState::Other),
     }
+}
+
+/// DP 61 (`paint_colour_data`) value: `color` on some zones (0-based), or
+/// `None` to turn them off, applied instantly. On the panel kit, effect 01
+/// is instant and 00 fades, although Tuya's template says the opposite.
+/// See `docs/lsc-protocol.md`.
+pub fn dp_paint(color: Option<Hsv>, zones: &[usize]) -> String {
+    let (action, hue, saturation, value) = match color {
+        Some(color) => (
+            PAINT_PENCIL,
+            ((color.h as f64 * 360.0).round() as i64).rem_euclid(360) as u16,
+            ((color.s as f64 * 1000.0).round() as i64).clamp(0, 1000) as u16,
+            // 1 %, the lights' minimum (the official app's too).
+            ((color.v as f64 * 1000.0).round() as i64).clamp(10, 1000) as u16,
+        ),
+        None => (PAINT_ERASER, 0, 0, 0),
+    };
+    let zones: Vec<u8> = zones
+        .iter()
+        .filter(|&&zone| zone < SCENE_SEGMENTS)
+        .map(|&zone| zone as u8 + 1)
+        .collect();
+    let mut bytes = vec![
+        0x00,
+        PAINT_COLOUR,
+        PAINT_INSTANT,
+        SCENE_SEGMENTS as u8,
+        action,
+    ];
+    for field in [hue, saturation, value] {
+        bytes.extend(field.to_be_bytes());
+    }
+    bytes.push(0x80 + zones.len() as u8);
+    bytes.extend(zones);
+    STANDARD.encode(bytes)
 }
 
 /// The data points a frame from the light reports (`{"dps": {...}}`, or
@@ -268,6 +309,33 @@ mod tests {
         let value = dp_scene_zones(&[Hsv::new(0.0, 1.0, 0.0); 3], false);
         let bytes = STANDARD.decode(value).expect("valid base64");
         assert_eq!(bytes[8], 1);
+    }
+
+    #[test]
+    fn paint_matches_the_official_app() {
+        // Frames the LSC app sent to the panel kit (01/11/2026).
+        let hex = |value: &str| {
+            STANDARD
+                .decode(value)
+                .expect("valid base64")
+                .iter()
+                .map(|byte| format!("{byte:02x}"))
+                .collect::<String>()
+        };
+        assert_eq!(
+            hex(&dp_paint(Some(Hsv::new(0.0, 1.0, 0.499)), &[0])),
+            "0001010c01000003e801f38101"
+        );
+        assert_eq!(
+            hex(&dp_paint(Some(Hsv::new(1.0 / 3.0, 1.0, 0.299)), &[2, 3])),
+            "0001010c01007803e8012b820304"
+        );
+        assert_eq!(hex(&dp_paint(None, &[4])), "0001010c020000000000008105");
+        // The lights' minimum: 1 %.
+        assert_eq!(
+            hex(&dp_paint(Some(Hsv::new(0.0, 1.0, 0.001)), &[0])),
+            "0001010c01000003e8000a8101"
+        );
     }
 
     #[test]

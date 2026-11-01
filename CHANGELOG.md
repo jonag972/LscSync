@@ -9,6 +9,15 @@ All notable changes to LscSync are documented here. The format follows
 
 ## [Unreleased]
 
+### Changed
+
+- Lights with several zones are driven zone by zone, the way the LSC app
+  does it: each zone gets its own brightness, and dark zones turn off
+  instead of showing white. Screen mode, dark scenes and the Music meter
+  all use it, at up to 30 changes per second, starting gently for the
+  first seconds after connecting.
+- Lights with several zones are detected by that same command.
+
 ## [0.2.8] - 2026-11-01
 
 ### Added

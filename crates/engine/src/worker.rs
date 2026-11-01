@@ -11,6 +11,7 @@ use std::sync::mpsc::{self, Receiver, Sender};
 use std::time::{Duration, Instant};
 
 use lscsync_core::color::{dominant_color_with, to_lamp};
+use lscsync_core::paint::Painter;
 use lscsync_core::protocol::LightState;
 use lscsync_core::{
     AudioHue, ColorCommand, DarkScenes, DeviceColors, Hsv, Mode, MusicStyle, Product, Rgb,
@@ -28,7 +29,7 @@ use crate::{Latest, LatestSender};
 const CONNECT_TIMEOUT: Duration = Duration::from_secs(10);
 /// How long a device has to say what it shows before the sync.
 const STATE_TIMEOUT: Duration = Duration::from_secs(2);
-/// How long a light has to report its scene back (it took the panel kit
+/// How long a light has to report a DP 61 command back (it took the panel kit
 /// well under a second).
 const DETECT_TIMEOUT: Duration = Duration::from_secs(2);
 
@@ -51,6 +52,13 @@ const DIM_FACTOR: f32 = 0.96;
 
 /// Single-color updates per second for lights that fade (DP 24).
 const LIGHT_UPDATES_PER_SECOND: f64 = 10.0;
+/// DP 61 commands per second for lights with several zones: the panel kit
+/// keeps up with ~40 (01/11/2026), whatever the number of zones in each.
+const PAINT_COMMANDS_PER_SECOND: f64 = 30.0;
+/// Right after connecting, the panel kit answers slower for a few seconds
+/// and stutters at full speed: DP 61 commands start at this pace.
+const PAINT_WARM_UP_PER_SECOND: f64 = 10.0;
+const PAINT_WARM_UP: Duration = Duration::from_secs(3);
 /// Pause before retrying a recapture after the output device changed.
 const RECAPTURE_RETRY: Duration = Duration::from_secs(2);
 
@@ -912,8 +920,7 @@ impl Stats {
 
 /// The music meter: as many zones lit as `volume` (0.0 to 1.0) of `count`,
 /// from the first zone (the last one with `invert`). The others are off
-/// (v = 0); the scene can't turn a single zone off, so the lights show them
-/// white (saturation 0), and the app's preview dark.
+/// (v = 0): turned off on the lights, dark in the app's preview.
 fn meter(volume: f32, count: usize, lit: Hsv, invert: bool) -> Vec<Hsv> {
     let on = ((volume * count as f32).round() as usize).min(count);
     let off = Hsv::new(lit.h, 0.0, 0.0);
@@ -991,6 +998,10 @@ impl Pace {
         }
     }
 
+    fn set_per_second(&mut self, per_second: f64) {
+        self.interval = Duration::from_secs_f64(1.0 / per_second);
+    }
+
     async fn wait(&mut self) {
         tokio::time::sleep_until(self.next).await;
         self.next = self.next.max(tokio::time::Instant::now()) + self.interval;
@@ -1013,35 +1024,50 @@ async fn drive(
         }
     };
     // What the device shows, as far as we know.
-    let mut last_zones: Option<Vec<Hsv>> = None;
+    let mut painter = Painter::default();
+    let mut painting = false;
     let mut last_single: Option<Hsv> = None;
     let mut light_pace = Pace::new(LIGHT_UPDATES_PER_SECOND);
+    let mut paint_pace = Pace::new(PAINT_WARM_UP_PER_SECOND);
+    let mut connected_at = tokio::time::Instant::now();
     let mut failing = false;
 
-    while frames.changed().await.is_ok() {
-        let Some(frame) = frames.borrow_and_update().clone() else {
-            continue;
-        };
-        let result = match (&frame, product) {
-            (Frame::Zones(colors), Product::MultiZone) => {
-                last_single = None;
-                let unchanged = last_zones.as_ref().is_some_and(|last: &Vec<Hsv>| {
-                    last.len() == colors.len()
-                        && last.iter().zip(colors).all(|(a, b)| !differs(*a, *b))
-                });
-                if unchanged {
-                    Ok(())
-                } else {
-                    last_zones = Some(colors.clone());
-                    lsc.send_scene_segments(colors).await
-                }
+    loop {
+        // While zones are still to paint, a newer frame replaces the one
+        // being painted; otherwise wait for the next frame.
+        let pending = painting && painter.next().is_some();
+        let fresh = if pending {
+            match frames.has_changed() {
+                Ok(changed) => changed,
+                Err(_) => break,
             }
-            _ => {
-                let color = match &frame {
-                    Frame::Color(color) => *color,
+        } else {
+            if frames.changed().await.is_err() {
+                break;
+            }
+            true
+        };
+        let frame = if fresh {
+            frames.borrow_and_update().clone()
+        } else {
+            None
+        };
+        let result = match (frame, product) {
+            (Some(Frame::Zones(colors)), Product::MultiZone) => {
+                if !painting {
+                    painter.forget();
+                }
+                painting = true;
+                last_single = None;
+                painter.want(&colors);
+                Ok(())
+            }
+            (Some(frame), _) => {
+                let color = match frame {
+                    Frame::Color(color) => color,
                     Frame::Zones(colors) => colors.first().copied().unwrap_or_default(),
                 };
-                last_zones = None;
+                painting = false;
                 if last_single.is_some_and(|last| !differs(last, color)) {
                     Ok(())
                 } else {
@@ -1057,10 +1083,32 @@ async fn drive(
                     }
                 }
             }
+            (None, _) => Ok(()),
+        };
+        // One command per turn, within the light's budget.
+        let result = match result {
+            Ok(()) if painting => match painter.next() {
+                Some(paint) => {
+                    paint_pace.set_per_second(if connected_at.elapsed() < PAINT_WARM_UP {
+                        PAINT_WARM_UP_PER_SECOND
+                    } else {
+                        PAINT_COMMANDS_PER_SECOND
+                    });
+                    paint_pace.wait().await;
+                    let sent = lsc.send_paint(&paint).await;
+                    if sent.is_ok() {
+                        painter.sent(&paint);
+                    }
+                    sent
+                }
+                None => Ok(()),
+            },
+            other => other,
         };
         match result {
             Ok(()) if failing => {
                 failing = false;
+                connected_at = tokio::time::Instant::now();
                 tracing::info!("{name}: answering again");
                 report(EngineEvent::DeviceBack(name.clone()));
             }
@@ -1072,7 +1120,7 @@ async fn drive(
                     report(EngineEvent::DeviceUnreachable(name.clone()));
                 }
                 // Unknown state: resend everything once it answers again.
-                last_zones = None;
+                painter.forget();
                 last_single = None;
                 tokio::time::sleep(DEVICE_BACKOFF).await;
             }
@@ -1108,7 +1156,7 @@ mod tests {
             [false, false, false, true, true, true]
         );
         assert_eq!(lit(&meter(1.0, 6, RED, false)), [true; 6]);
-        // Off zones are white on the lights: no saturation.
+        // Off zones: no saturation, no brightness.
         assert_eq!(meter(0.0, 3, RED, false)[0].s, 0.0);
     }
 

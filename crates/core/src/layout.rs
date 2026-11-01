@@ -116,9 +116,10 @@ const PANEL_KIT_PRODUCT_KEY: &str = "duxmr5beo0hrowle";
 /// How a device is driven, from what is known about its product.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Product {
-    /// Several zones, one color each, applied instantly (a 12-segment DP 51
-    /// scene, so up to 12 zones), and an instant single color (DP 27): the
-    /// LSC panel kit, or a light found to have the scene.
+    /// Several zones, each with its own color and brightness, applied
+    /// instantly (DP 61 on 12 segments, so up to 12 zones), and an instant
+    /// single color (DP 27): the LSC panel kit, or a light found to take
+    /// DP 61.
     MultiZone,
     /// Any other light: one color (DP 24).
     Light,

@@ -6,6 +6,7 @@
 
 pub mod color;
 pub mod layout;
+pub mod paint;
 pub mod preferences;
 pub mod profile;
 pub mod protocol;

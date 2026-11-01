@@ -193,6 +193,20 @@ impl Lsc {
         Ok(())
     }
 
+    /// A color on some zones, or turns them off, instantly (DP 61, colour
+    /// mode): each zone has its own brightness.
+    pub async fn send_paint(&self, paint: &lscsync_core::paint::Paint) -> Result<(), LscError> {
+        self.ensure_power().await?;
+        self.ensure_mode(MODE_COLOR, protocol::MODE_COLOR).await?;
+        self.device
+            .set_value(
+                protocol::DP_PAINT,
+                protocol::dp_paint(paint.color, &paint.zones),
+            )
+            .await?;
+        Ok(())
+    }
+
     /// 3 colors left / middle / right (DP 51).
     pub async fn send_zones(&self, zones: &[Hsv; 3], invert: bool) -> Result<(), LscError> {
         self.ensure_power().await?;
@@ -203,22 +217,25 @@ impl Lsc {
         Ok(())
     }
 
-    /// Whether the light has several zones, which Tuya doesn't say: in scene
-    /// mode, given a white DP 51 scene, a light that has it reports the scene
-    /// back; others only report the power and the mode (panel kit and an
-    /// unknown DP, 01/11/2026). `None` when the light reports nothing at all
-    /// within `timeout`.
+    /// Whether the light has several zones, which Tuya doesn't say: in
+    /// colour mode, given a DP 61 command painting every segment white, a
+    /// light that has it reports the command back; others only report the
+    /// power and the mode (panel kit and an unknown DP, 01/11/2026). `None`
+    /// when the light reports nothing at all within `timeout`.
     pub async fn detect_zones(&self, timeout: Duration) -> Option<bool> {
         let mut events = self.listener();
-        let white = Hsv::new(0.0, 0.0, 1.0);
-        self.send_scene_segments(&[white]).await.ok()?;
+        let white = lscsync_core::paint::Paint {
+            color: Some(Hsv::new(0.0, 0.0, 1.0)),
+            zones: (0..protocol::SCENE_SEGMENTS).collect(),
+        };
+        self.send_paint(&white).await.ok()?;
         let mut answered = false;
         let found = tokio::time::timeout(timeout, async {
             while let Some(event) = events.recv().await {
                 if let rustuya::tokio::Event::Frame(frame) = event
                     && let Some(dps) = protocol::reported_dps(&frame.payload)
                 {
-                    if dps.contains_key(protocol::DP_SCENE) {
+                    if dps.contains_key(protocol::DP_PAINT) {
                         return true;
                     }
                     answered = true;

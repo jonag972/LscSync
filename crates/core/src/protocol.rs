@@ -18,6 +18,7 @@ use crate::color::Hsv;
 
 pub const DP_POWER: &str = "20";
 pub const DP_MODE: &str = "21";
+pub const DP_WHITE_BRIGHTNESS: &str = "22";
 pub const DP_COLOR: &str = "24";
 pub const DP_SCENE: &str = "51";
 pub const DP_MUSIC: &str = "27";
@@ -35,6 +36,38 @@ const SCENE_STATIC: u8 = 0x00;
 const SCENE_SPEED: u8 = 0x32;
 const SCENE_SPLIT: u8 = 0x80;
 const COLORS_PER_SCENE: usize = 6;
+
+/// What a light showed, as far as its status says: on or off, the mode and
+/// the white brightness. Its colors can't be read back.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum LightState {
+    Off,
+    /// White, at this brightness (10-1000) when given.
+    White(Option<u16>),
+    /// A color, a scene or music.
+    Other,
+}
+
+/// Reads a status reply (`{"dps": {...}}`, or under `"data"`). `None` when
+/// it says neither the power nor the mode.
+pub fn parse_status(payload: &[u8]) -> Option<LightState> {
+    let json: serde_json::Value = serde_json::from_slice(payload).ok()?;
+    let dps = json.get("dps").or_else(|| json.get("data")?.get("dps"))?;
+    let power = dps.get(DP_POWER).and_then(serde_json::Value::as_bool);
+    let mode = dps.get(DP_MODE).and_then(serde_json::Value::as_str);
+    let brightness = dps
+        .get(DP_WHITE_BRIGHTNESS)
+        .and_then(serde_json::Value::as_u64)
+        .and_then(|value| u16::try_from(value).ok());
+    match (power, mode) {
+        (None, None) => None,
+        (Some(false), _) => Some(LightState::Off),
+        (_, Some(MODE_WHITE)) => Some(LightState::White(brightness)),
+        (_, Some(_)) => Some(LightState::Other),
+        // On, mode unknown.
+        (Some(true), None) => Some(LightState::Other),
+    }
+}
 
 /// DP 24 value: HHHHSSSSVVVV in hexadecimal (0-360, 0-1000, 0-1000).
 pub fn dp_color(color: Hsv) -> String {
@@ -129,6 +162,25 @@ fn encode_scene(zones: &[Hsv], invert: bool) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn status_says_what_the_light_showed() {
+        let read = |json: &str| parse_status(json.as_bytes());
+        assert_eq!(
+            read(r#"{"dps": {"20": false, "21": "white"}}"#),
+            Some(LightState::Off)
+        );
+        assert_eq!(
+            read(r#"{"dps": {"20": true, "21": "white", "22": 430}}"#),
+            Some(LightState::White(Some(430)))
+        );
+        assert_eq!(
+            read(r#"{"data": {"dps": {"20": true, "21": "scene"}}}"#),
+            Some(LightState::Other)
+        );
+        assert_eq!(read(r#"{"dps": {"26": 0}}"#), None);
+        assert_eq!(read("not json"), None);
+    }
 
     const RED: Hsv = Hsv::new(0.0, 1.0, 1.0);
     const GREEN: Hsv = Hsv::new(1.0 / 3.0, 1.0, 1.0);

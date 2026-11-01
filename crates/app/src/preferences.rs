@@ -2,7 +2,7 @@
 
 use gpui_kit::prelude::FluentBuilder as _;
 use gpui_kit::*;
-use lscsync_core::Language;
+use lscsync_core::{Language, WhenStopped};
 use lscsync_platform::preferences_path;
 use rust_i18n::t;
 
@@ -222,6 +222,13 @@ impl Root {
             .child(card().child(
                 row(t!("settings.language").to_string()).child(self.render_language_choice(cx)),
             ))
+            .child(section_label(t!("settings.lights_heading").to_string()))
+            .child(
+                card().child(
+                    row(t!("settings.when_stopped").to_string())
+                        .child(self.render_when_stopped_choice(cx)),
+                ),
+            )
             .child(section_label(t!("settings.updates_heading").to_string()))
             .child(self.render_updates(cx))
             .when(
@@ -250,6 +257,61 @@ impl Root {
                         ),
                     ),
             )
+    }
+
+    /// Off, white, or as the lights were before the sync.
+    fn render_when_stopped_choice(&self, cx: &mut Context<Self>) -> Div {
+        let current = self.profile.settings.when_stopped;
+        let option = |value: WhenStopped, label: String, cx: &mut Context<Self>| {
+            let chosen = value == current;
+            div()
+                .id(match value {
+                    WhenStopped::Off => "stopped-off",
+                    WhenStopped::White => "stopped-white",
+                    WhenStopped::Previous => "stopped-previous",
+                })
+                .px(px(9.0))
+                .py(px(4.0))
+                .rounded(px(6.0))
+                .text_size(px(12.0))
+                .map(|option| {
+                    if chosen {
+                        option.bg(rgb(SURFACE_RAISED)).text_color(rgb(TEXT))
+                    } else {
+                        option
+                            .cursor_pointer()
+                            .text_color(rgb(TEXT_MUTED))
+                            .hover(|style| style.text_color(rgb(TEXT)))
+                            .on_click(cx.listener(move |this, _, _, cx| {
+                                this.change_settings(|s| s.when_stopped = value, cx)
+                            }))
+                    }
+                })
+                .child(label)
+        };
+        div()
+            .flex()
+            .gap(px(2.0))
+            .p(px(2.0))
+            .rounded(px(8.0))
+            .bg(rgb(BG))
+            .border_1()
+            .border_color(rgb(LINE))
+            .child(option(
+                WhenStopped::Off,
+                t!("settings.stopped_off").to_string(),
+                cx,
+            ))
+            .child(option(
+                WhenStopped::White,
+                t!("settings.stopped_white").to_string(),
+                cx,
+            ))
+            .child(option(
+                WhenStopped::Previous,
+                t!("settings.stopped_previous").to_string(),
+                cx,
+            ))
     }
 
     fn render_language_choice(&self, cx: &mut Context<Self>) -> Div {

@@ -11,9 +11,10 @@ use std::sync::mpsc::{self, Receiver, Sender};
 use std::time::{Duration, Instant};
 
 use lscsync_core::color::{dominant_color_with, to_lamp};
+use lscsync_core::protocol::LightState;
 use lscsync_core::{
     AudioHue, ColorCommand, DarkScenes, DeviceColors, Hsv, Mode, MusicStyle, Product, Rgb,
-    Settings, Snapshot, Zone,
+    Settings, Snapshot, WhenStopped, Zone,
 };
 use thiserror::Error;
 use tokio::sync::watch;
@@ -24,6 +25,8 @@ use crate::tuya::{Lsc, LscConfig, LscError};
 use crate::{Latest, LatestSender};
 
 const CONNECT_TIMEOUT: Duration = Duration::from_secs(10);
+/// How long a device has to say what it shows before the sync.
+const STATE_TIMEOUT: Duration = Duration::from_secs(2);
 
 // A color is only sent again when it changed at least this much.
 const HUE_THRESHOLD: f32 = 0.02;
@@ -251,6 +254,8 @@ struct Link {
     smoothed: Vec<Rgb>,
     /// Last colors shown before the picture went dark (Hold and Dim).
     lit: Vec<Hsv>,
+    /// What the device showed before the sync, for "as before".
+    before: Option<LightState>,
     frames: watch::Sender<Option<Frame>>,
     task: JoinHandle<Lsc>,
 }
@@ -313,11 +318,21 @@ impl Engine {
                 .join(", ")
         );
 
+        // "As before" needs what each light shows before the sync touches it.
+        let read_state = settings.when_stopped == WhenStopped::Previous;
         let connections: Vec<_> = targets
             .iter()
             .map(|target| {
                 let config = target.config.clone();
-                runtime.spawn(async move { Lsc::connect(&config, CONNECT_TIMEOUT).await })
+                runtime.spawn(async move {
+                    let lsc = Lsc::connect(&config, CONNECT_TIMEOUT).await?;
+                    let before = if read_state {
+                        lsc.read_state(STATE_TIMEOUT).await
+                    } else {
+                        None
+                    };
+                    Ok((lsc, before))
+                })
             })
             .collect();
         let mut links = Vec::new();
@@ -328,9 +343,12 @@ impl Engine {
                 .map_err(|error| LscError::Io(error.to_string()))
                 .and_then(|result| result);
             match connected {
-                Ok(lsc) => {
+                Ok((lsc, before)) => {
                     tracing::info!("{}: connected", target.name);
-                    links.push(Self::link(&runtime, target, lsc, events.clone()))
+                    if read_state {
+                        tracing::info!("{}: before the sync: {before:?}", target.name);
+                    }
+                    links.push(Self::link(&runtime, target, lsc, before, events.clone()))
                 }
                 Err(error) => {
                     tracing::warn!("{}: {error}", target.name);
@@ -395,6 +413,7 @@ impl Engine {
         runtime: &tokio::runtime::Runtime,
         target: Target,
         lsc: Lsc,
+        before: Option<LightState>,
         events: Option<LatestSender<EngineEvent>>,
     ) -> Link {
         let (frames, receiver) = watch::channel(None);
@@ -421,6 +440,7 @@ impl Engine {
             smoothed: Vec::new(),
             lit: Vec::new(),
             zones: target.zones,
+            before,
             frames,
             task,
         }
@@ -698,8 +718,8 @@ impl Engine {
         Ok(self.shown.clone())
     }
 
-    /// Stops the device tasks, sets the devices back to white if asked, and
-    /// closes the connections.
+    /// Stops the device tasks, leaves the devices off, white or as they
+    /// were, and closes the connections.
     pub fn close(self) {
         tracing::info!("sync stopping");
         let Self {
@@ -719,10 +739,13 @@ impl Engine {
                 let Ok(lsc) = link.task.await else {
                     continue;
                 };
-                if settings.restore_white
-                    && let Err(error) = lsc.restore_white().await
-                {
-                    tracing::warn!("back to white: {error}");
+                let result = match settings.when_stopped {
+                    WhenStopped::Off => lsc.power_off().await,
+                    WhenStopped::White => lsc.restore_white().await,
+                    WhenStopped::Previous => lsc.restore(link.before).await,
+                };
+                if let Err(error) = result {
+                    tracing::warn!("{:?} when stopped: {error}", settings.when_stopped);
                 }
                 lsc.close().await;
             }

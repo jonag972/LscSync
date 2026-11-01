@@ -139,7 +139,11 @@ async fn pattern() -> Result<(), Box<dyn std::error::Error>> {
         .await?;
     tokio::time::sleep(Duration::from_secs(3)).await;
 
-    if settings.restore_white {
+    // No state was read before the pattern: "as before" falls back to white.
+    if settings.when_stopped == lscsync_core::WhenStopped::Off {
+        println!("off");
+        lsc.power_off().await?;
+    } else {
         println!("back to white");
         lsc.restore_white().await?;
     }

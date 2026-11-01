@@ -108,7 +108,8 @@ impl Profile {
     }
 
     fn from_legacy(text: &str) -> Result<Self, ProfileError> {
-        let settings: Settings = serde_json::from_str(text)?;
+        let mut settings: Settings = serde_json::from_str(text)?;
+        settings.upgrade();
         let legacy: LegacyDevice = serde_json::from_str(text)?;
         let mut profile = Self {
             settings,
@@ -138,6 +139,7 @@ impl Profile {
         if profile.version > PROFILE_VERSION {
             return Err(ProfileError::TooNew);
         }
+        profile.settings.upgrade();
         // Before multi-device sync, a single device followed the screen.
         if !profile
             .devices

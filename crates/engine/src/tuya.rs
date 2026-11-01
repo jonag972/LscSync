@@ -203,6 +203,48 @@ impl Lsc {
         Ok(())
     }
 
+    /// Asks the light what it shows. `None` without an answer in `timeout`.
+    pub async fn read_state(&self, timeout: Duration) -> Option<protocol::LightState> {
+        let mut events = self.listener();
+        self.query().await.ok()?;
+        tokio::time::timeout(timeout, async {
+            while let Some(event) = events.recv().await {
+                if let rustuya::tokio::Event::Frame(frame) = event
+                    && let Some(state) = protocol::parse_status(&frame.payload)
+                {
+                    return Some(state);
+                }
+            }
+            None
+        })
+        .await
+        .ok()
+        .flatten()
+    }
+
+    /// Puts the light back as it was: off, or white at its brightness. A
+    /// color or a scene can't be read back: white instead.
+    pub async fn restore(&self, state: Option<protocol::LightState>) -> Result<(), LscError> {
+        match state {
+            Some(protocol::LightState::Off) => self.power_off().await,
+            Some(protocol::LightState::White(Some(brightness))) => {
+                self.device
+                    .set_value(protocol::DP_WHITE_BRIGHTNESS, brightness)
+                    .await?;
+                self.restore_white().await
+            }
+            _ => self.restore_white().await,
+        }
+    }
+
+    pub async fn power_off(&self) -> Result<(), LscError> {
+        self.device.set_value(protocol::DP_POWER, false).await?;
+        // Fire-and-forget, like `restore_white`.
+        tokio::time::sleep(Duration::from_millis(300)).await;
+        self.powered.store(false, Ordering::Relaxed);
+        Ok(())
+    }
+
     pub async fn restore_white(&self) -> Result<(), LscError> {
         self.device
             .set_value(protocol::DP_MODE, protocol::MODE_WHITE)

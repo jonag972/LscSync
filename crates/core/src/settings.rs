@@ -43,6 +43,20 @@ pub enum MusicStyle {
     Level,
 }
 
+/// What the lights show once the sync stops.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum WhenStopped {
+    /// Turned off.
+    Off,
+    /// Plain white.
+    #[default]
+    White,
+    /// What they showed before the sync: off, or white at the same
+    /// brightness. A color or a scene can't be read back: white instead.
+    Previous,
+}
+
 /// What the screen modes do when the picture goes dark.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -82,8 +96,11 @@ pub struct Settings {
     /// Music mode, Pulse: the frequency range treated as the bass, in Hz.
     pub music_bass_min_hz: u16,
     pub music_bass_max_hz: u16,
-    #[serde(alias = "retour_blanc")]
-    pub restore_white: bool,
+    pub when_stopped: WhenStopped,
+    /// Before `when_stopped`: white or not. Read once, then dropped (see
+    /// [`Settings::upgrade`]).
+    #[serde(default, skip_serializing, alias = "retour_blanc")]
+    pub restore_white: Option<bool>,
     #[serde(alias = "inverser_zones")]
     pub invert_zones: bool,
     /// Screen modes: the lights never go below this brightness (0 to 1).
@@ -121,7 +138,8 @@ impl Default for Settings {
             music_style: MusicStyle::Pulse,
             music_bass_min_hz: 20,
             music_bass_max_hz: 250,
-            restore_white: true,
+            when_stopped: WhenStopped::White,
+            restore_white: None,
             invert_zones: false,
             screen_min_light: 0.0,
             dark_scenes: DarkScenes::Follow,
@@ -131,6 +149,16 @@ impl Default for Settings {
             music_delay: None,
             fixed_hue: 30,
             fixed_saturation: 1.0,
+        }
+    }
+}
+
+impl Settings {
+    /// Brings settings from an older version up to date: "white when
+    /// stopped" turned off left the lights alone, now "as before".
+    pub fn upgrade(&mut self) {
+        if self.restore_white.take() == Some(false) {
+            self.when_stopped = WhenStopped::Previous;
         }
     }
 }
@@ -171,6 +199,27 @@ mod tests {
         assert_eq!(settings.music_style, MusicStyle::Pulse);
         assert_eq!(settings.music_bass_min_hz, 20);
         assert_eq!(settings.music_bass_max_hz, 250);
+    }
+
+    #[test]
+    fn restore_white_becomes_when_stopped() {
+        let read = |json: &str| {
+            let mut settings: Settings = serde_json::from_str(json).expect("load");
+            settings.upgrade();
+            settings
+        };
+        assert_eq!(
+            read(r#"{"restore_white": true}"#).when_stopped,
+            WhenStopped::White
+        );
+        assert_eq!(
+            read(r#"{"retour_blanc": false}"#).when_stopped,
+            WhenStopped::Previous
+        );
+        assert_eq!(read("{}").when_stopped, WhenStopped::White);
+        let json = serde_json::to_value(read(r#"{"restore_white": false}"#)).unwrap();
+        assert_eq!(json["when_stopped"], "previous");
+        assert!(json.get("restore_white").is_none());
     }
 
     #[test]

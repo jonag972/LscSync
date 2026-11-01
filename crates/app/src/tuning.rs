@@ -217,7 +217,11 @@ impl Root {
 
     /// A setting that is not a slider changed: applied live and saved. The
     /// sliders follow, in case it is one of their values.
-    fn change_settings(&mut self, change: impl FnOnce(&mut Settings), cx: &mut Context<Self>) {
+    pub(crate) fn change_settings(
+        &mut self,
+        change: impl FnOnce(&mut Settings),
+        cx: &mut Context<Self>,
+    ) {
         change(&mut self.profile.settings);
         if let Some(engine) = &self.engine {
             engine.update(self.profile.settings.clone());
@@ -414,14 +418,7 @@ impl Root {
                 ),
             );
         }
-        rows.child(switch_row(
-            "restore-white",
-            t!("tuning.restore_white").to_string(),
-            settings.restore_white,
-            cx.listener(|this, _, _, cx| {
-                this.change_settings(|s| s.restore_white = !s.restore_white, cx)
-            }),
-        ))
+        rows
     }
 
     /// Music mode: every panel pulses with the bass, or a meter of the
@@ -600,24 +597,6 @@ fn choice(label: String, options: Vec<(&'static str, String, bool, ClickHandler)
                 .child(label),
         )
         .child(choices)
-}
-
-fn switch_row(
-    id: &'static str,
-    label: String,
-    on: bool,
-    on_click: impl Fn(&ClickEvent, &mut Window, &mut App) + 'static,
-) -> Div {
-    div()
-        .flex()
-        .items_center()
-        .justify_between()
-        .gap(px(10.0))
-        .py(px(6.0))
-        .text_size(px(12.5))
-        .text_color(rgb(TEXT_SOFT))
-        .child(div().flex_1().child(label))
-        .child(toggle(id, on).on_click(on_click))
 }
 
 pub fn slider_value(state: &Entity<SliderState>, cx: &App) -> f32 {
